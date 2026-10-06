@@ -1,0 +1,181 @@
+import io
+import unittest
+from contextlib import redirect_stdout
+from unittest.mock import Mock
+
+from agents.code_analysis import CodeAnalysisAgent
+from agents.verification import VerificationAgent
+from main import main
+from models.task import Task
+from runtime.registry import AgentRegistry
+from runtime.supervisor import Supervisor
+from state import AgentState
+
+
+class StateTests(unittest.TestCase):
+    def test_task_defaults_to_pending(self):
+        task = Task("T1", "CodeAnalysisAgent", "analyze_code", "./demo_app")
+        self.assertEqual(task.status, "PENDING")
+
+    def test_state_defaults_and_mutations(self):
+        state = AgentState("./demo_app")
+        task = Task("T1", "CodeAnalysisAgent", "analyze_code", state.target)
+        observation = {"task_id": task.id}
+
+        self.assertEqual(state.target, "./demo_app")
+        self.assertEqual(state.phase, "ANALYZE")
+        self.assertEqual(state.tasks, [])
+        self.assertEqual(state.observations, [])
+        self.assertEqual(state.findings, [])
+        self.assertEqual(state.evidence, [])
+
+        state.add_task(task)
+        state.add_observation(observation)
+        self.assertIs(state.tasks[0], task)
+        self.assertIs(state.observations[0], observation)
+
+    def test_state_collections_are_not_shared(self):
+        first = AgentState("./first")
+        second = AgentState("./second")
+        for name in ("tasks", "findings", "evidence", "observations"):
+            with self.subTest(collection=name):
+                self.assertIsNot(getattr(first, name), getattr(second, name))
+
+
+class RegistryTests(unittest.TestCase):
+    def test_registration_and_lookup(self):
+        registry = AgentRegistry()
+        agent = CodeAnalysisAgent()
+        registry.register("CodeAnalysisAgent", agent, ["analyze_code"])
+
+        info = registry.get("CodeAnalysisAgent")
+        self.assertIs(info["instance"], agent)
+        self.assertEqual(info["capabilities"], ["analyze_code"])
+
+    def test_unknown_agent_returns_none(self):
+        self.assertIsNone(AgentRegistry().get("UnknownAgent"))
+
+    def test_registration_copies_capabilities(self):
+        registry = AgentRegistry()
+        capabilities = ["analyze_code"]
+        registry.register("CodeAnalysisAgent", CodeAnalysisAgent(), capabilities)
+        capabilities.append("verify_sqli")
+        self.assertEqual(
+            registry.get("CodeAnalysisAgent")["capabilities"], ["analyze_code"]
+        )
+
+
+class SupervisorTests(unittest.TestCase):
+    def setUp(self):
+        self.state = AgentState("./demo_app")
+        self.registry = AgentRegistry()
+        self.supervisor = Supervisor(self.registry)
+        self.task = Task("T1", "CodeAnalysisAgent", "analyze_code", self.state.target)
+        self.state.add_task(self.task)
+
+    def test_success_records_observation_and_completes_task(self):
+        observation = {
+            "agent": "CodeAnalysisAgent",
+            "task_id": "T1",
+            "execution_status": "SUCCESS",
+            "data": {},
+        }
+
+        def run(task):
+            self.assertIs(task, self.task)
+            self.assertEqual(task.status, "RUNNING")
+            self.assertEqual(self.state.observations, [])
+            return observation
+
+        agent = Mock()
+        agent.run.side_effect = run
+        self.registry.register(self.task.agent, agent, [self.task.action])
+
+        result = self.supervisor.delegate(self.task, self.state)
+
+        agent.run.assert_called_once_with(self.task)
+        self.assertIs(result, observation)
+        self.assertIs(self.state.observations[0], observation)
+        self.assertEqual(self.task.status, "COMPLETED")
+        self.assertEqual(self.state.tasks, [self.task])
+        self.assertEqual(self.state.tasks[0].status, "COMPLETED")
+        self.assertEqual(self.state.findings, [])
+        self.assertEqual(self.state.evidence, [])
+
+    def test_unknown_agent_is_denied(self):
+        result = self.supervisor.delegate(self.task, self.state)
+
+        self.assertEqual(result, {"status": "DENIED", "reason": "UNKNOWN_AGENT"})
+        self.assertEqual(self.task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_unsupported_capability_is_denied_without_running_agent(self):
+        agent = Mock()
+        self.registry.register(self.task.agent, agent, ["verify_sqli"])
+
+        result = self.supervisor.delegate(self.task, self.state)
+
+        self.assertEqual(
+            result, {"status": "DENIED", "reason": "CAPABILITY_NOT_ALLOWED"}
+        )
+        agent.run.assert_not_called()
+        self.assertEqual(self.task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_agent_exception_marks_task_failed(self):
+        agent = Mock()
+        agent.run.side_effect = RuntimeError("Mock execution failed")
+        self.registry.register(self.task.agent, agent, [self.task.action])
+
+        result = self.supervisor.delegate(self.task, self.state)
+
+        self.assertEqual(
+            result, {"status": "FAILED", "reason": "Mock execution failed"}
+        )
+        self.assertEqual(self.task.status, "FAILED")
+        self.assertEqual(self.state.observations, [])
+
+    def test_both_mock_agents_run_through_runtime(self):
+        self.registry.register("CodeAnalysisAgent", CodeAnalysisAgent(), ["analyze_code"])
+        self.registry.register("VerificationAgent", VerificationAgent(), ["verify_sqli"])
+        verification = Task("T2", "VerificationAgent", "verify_sqli", self.state.target)
+        self.state.add_task(verification)
+
+        with redirect_stdout(io.StringIO()):
+            analysis_result = self.supervisor.delegate(self.task, self.state)
+            verification_result = self.supervisor.delegate(verification, self.state)
+
+        self.assertEqual(analysis_result["agent"], "CodeAnalysisAgent")
+        self.assertEqual(analysis_result["task_id"], "T1")
+        self.assertEqual(analysis_result["execution_status"], "SUCCESS")
+        self.assertEqual(
+            analysis_result["data"]["potential_findings"], ["SQL Injection"]
+        )
+        self.assertEqual(verification_result["agent"], "VerificationAgent")
+        self.assertEqual(verification_result["task_id"], "T2")
+        self.assertEqual(verification_result["execution_status"], "SUCCESS")
+        self.assertEqual(self.task.status, "COMPLETED")
+        self.assertEqual(verification.status, "COMPLETED")
+        self.assertEqual(
+            self.state.observations, [analysis_result, verification_result]
+        )
+        self.assertEqual(self.state.findings, [])
+        self.assertEqual(self.state.evidence, [])
+
+
+class MainTests(unittest.TestCase):
+    def test_demo_prints_completed_task_and_observation(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main()
+
+        text = output.getvalue()
+        self.assertIn("[CodeAnalysisAgent] analyzing: ./demo_app", text)
+        self.assertIn("=== Result ===", text)
+        self.assertIn("=== Task Status ===\nCOMPLETED", text)
+        self.assertIn("=== Observations ===", text)
+        self.assertIn('"potential_findings": [', text)
+
+
+if __name__ == "__main__":
+    unittest.main()
