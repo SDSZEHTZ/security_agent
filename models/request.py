@@ -3,6 +3,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+Action = Literal[
+    "analyze_code",
+    "read_file",
+    "verify_sqli",
+    "verify_ssrf",
+    "execute_command",
+    "generate_report",
+]
+
+
 class TaskRequest(BaseModel):
 
     model_config = ConfigDict(
@@ -13,13 +23,6 @@ class TaskRequest(BaseModel):
 
     agent: str = Field(min_length=1)
 
-    action: Literal[
-        "analyze_code",
-        "read_file",
-        "verify_sqli",
-        "verify_ssrf",
-        "execute_command",
-        "generate_report",
-    ]
+    action: Action
 
     target: str = Field(min_length=1)

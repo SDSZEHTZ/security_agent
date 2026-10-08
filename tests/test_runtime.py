@@ -301,10 +301,11 @@ class SecurityControlTests(unittest.TestCase):
             {
                 "status": "WAITING_CONFIRMATION",
                 "reason": "POLICY_CONFIRM",
+                "action_id": "A001",
             },
         )
         agent.run.assert_not_called()
-        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.status, "WAITING_CONFIRMATION")
         self.assertEqual(self.state.observations, [])
 
     def test_out_of_scope_confirm_action_is_denied_before_confirmation(self):
@@ -332,7 +333,246 @@ class SecurityControlTests(unittest.TestCase):
         self.assertEqual(task.status, "PENDING")
         self.assertEqual(self.state.observations, [])
 
+
+class ApprovalTests(unittest.TestCase):
+    def setUp(self):
+        self.state = AgentState("./demo_app")
+        self.state.phase = "VERIFY"
+        self.registry = AgentRegistry()
+        self.agent = Mock()
+        self.registry.register(
+            "VerificationAgent",
+            self.agent,
+            ["verify_ssrf"],
+        )
+        self.supervisor = Supervisor(self.registry)
+        self.task = Task(
+            "T1",
+            "VerificationAgent",
+            "verify_ssrf",
+            self.state.target,
+        )
+        self.state.add_task(self.task)
+
+    def test_confirm_creates_pending_action(self):
+        result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "WAITING_CONFIRMATION",
+                "reason": "POLICY_CONFIRM",
+                "action_id": "A001",
+            },
+        )
+        pending = self.supervisor.approval_store.get("A001")
+        self.assertEqual(pending.status, "WAITING_CONFIRMATION")
+        self.assertEqual(pending.snapshot.id, "T1")
+        self.assertEqual(pending.snapshot.agent, "VerificationAgent")
+        self.assertEqual(pending.snapshot.action, "verify_ssrf")
+        self.assertEqual(pending.snapshot.target, "./demo_app")
+        self.assertEqual(self.task.status, "WAITING_CONFIRMATION")
+        self.agent.run.assert_not_called()
+        self.assertEqual(self.state.observations, [])
+
+    def test_approved_action_executes_once(self):
+        observation = {
+            "agent": "VerificationAgent",
+            "task_id": "T1",
+            "execution_status": "SUCCESS",
+            "data": {},
+        }
+        self.agent.run.return_value = observation
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+
+        result = self.supervisor.approve(
+            pending_result["action_id"],
+            self.state,
+        )
+
+        self.assertIs(result, observation)
+        self.agent.run.assert_called_once()
+        executed_request = self.agent.run.call_args.args[0]
+        self.assertIsNot(executed_request, self.task)
+        self.assertEqual(executed_request.id, "T1")
+        self.assertEqual(executed_request.agent, "VerificationAgent")
+        self.assertEqual(executed_request.action, "verify_ssrf")
+        self.assertEqual(executed_request.target, "./demo_app")
+        self.assertEqual(self.task.status, "COMPLETED")
+        self.assertEqual(self.state.observations, [observation])
+        self.assertEqual(
+            self.supervisor.approval_store.get("A001").status,
+            "EXECUTED",
+        )
+
+    def test_modified_task_is_not_executed(self):
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+        action_id = pending_result["action_id"]
+        self.task.target = "./other_target"
+
+        result = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "DENIED",
+                "reason": "APPROVED_REQUEST_MISMATCH",
+            },
+        )
+        self.agent.run.assert_not_called()
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(
+            self.supervisor.approval_store.get(action_id).status,
+            "REJECTED",
+        )
+
+    def test_approval_rechecks_capability(self):
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+        action_id = pending_result["action_id"]
+        self.registry.agents[
+            "VerificationAgent"
+        ]["capabilities"] = []
+
+        result = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "DENIED",
+                "reason": "CAPABILITY_NOT_ALLOWED",
+            },
+        )
+        self.agent.run.assert_not_called()
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(
+            self.supervisor.approval_store.get(action_id).status,
+            "REJECTED",
+        )
+
+    def test_approval_rechecks_policy(self):
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+        action_id = pending_result["action_id"]
+        self.supervisor.policy.rules[
+            "verify_ssrf"
+        ] = "DENY"
+
+        result = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "DENIED",
+                "reason": "POLICY_DENIED",
+            },
+        )
+        self.agent.run.assert_not_called()
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(
+            self.supervisor.approval_store.get(action_id).status,
+            "REJECTED",
+        )
+
+    def test_approval_rechecks_scope(self):
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+        action_id = pending_result["action_id"]
+        self.state.target = "./other_target"
+
+        result = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "DENIED",
+                "reason": "TARGET_OUT_OF_SCOPE",
+            },
+        )
+        self.agent.run.assert_not_called()
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(
+            self.supervisor.approval_store.get(action_id).status,
+            "REJECTED",
+        )
+
+    def test_approval_cannot_be_replayed(self):
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T1",
+            "execution_status": "SUCCESS",
+            "data": {},
+        }
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+        action_id = pending_result["action_id"]
+
+        first = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+        second = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+
+        self.assertEqual(first["execution_status"], "SUCCESS")
+        self.assertEqual(
+            second,
+            {
+                "status": "DENIED",
+                "reason": "INVALID_APPROVAL_STATE",
+            },
+        )
+        self.agent.run.assert_called_once()
+        self.assertEqual(len(self.state.observations), 1)
+
+    def test_unknown_action_id_is_denied(self):
+        result = self.supervisor.approve(
+            "A999",
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "DENIED",
+                "reason": "UNKNOWN_PENDING_ACTION",
+            },
+        )
+        self.agent.run.assert_not_called()
+
     def test_unknown_policy_decision_defaults_to_deny(self):
+        self.state.phase = "ANALYZE"
         agent = Mock()
         policy = Mock()
         policy.evaluate.return_value = "ALOW"

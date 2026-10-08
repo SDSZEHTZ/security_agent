@@ -1,20 +1,19 @@
-# Changelog
-
-## v0.2.0 - Runtime Security Gates
+## v0.3.0 - Secure HITL Approval Flow
 
 ### Added
 
-- Pydantic task schema validation
-- Workflow phase validation
-- Policy engine
-- Scope validation
-- ALLOW / CONFIRM / DENY decisions
-- Security regression tests
+- PendingAction lifecycle
+- Immutable approval snapshots
+- Runtime approval store
+- Action IDs
+- User approval flow
+- Secondary runtime validation
+- Approval replay protection
 
 ### Security
 
-- Invalid actions are rejected before execution
-- Agents cannot execute actions outside the current workflow phase
-- Policy DENY prevents execution even when capability exists
-- Out-of-scope targets are rejected
-- CONFIRM actions cannot execute before approval
+- Prevent approval laundering
+- Detect task mutation after confirmation request
+- Re-check capability, policy and scope before execution
+- Prevent duplicate execution of approved actions
+- Ensure CONFIRM does not bypass runtime security gates

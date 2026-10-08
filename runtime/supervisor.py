@@ -1,9 +1,10 @@
 from pydantic import ValidationError
 
-from runtime.validator import RequestValidator
-from runtime.workflow import WorkflowEngine
+from runtime.approval import ApprovalStore
 from runtime.policy import PolicyEngine
 from runtime.scope import ScopeEngine
+from runtime.validator import RequestValidator
+from runtime.workflow import WorkflowEngine
 
 
 class Supervisor:
@@ -15,6 +16,7 @@ class Supervisor:
         workflow=None,
         policy=None,
         scope=None,
+        approval_store=None,
     ):
 
         self.registry = registry
@@ -35,12 +37,20 @@ class Supervisor:
             scope or ScopeEngine()
         )
 
+        self.approval_store = (
+            approval_store
+            or ApprovalStore()
+        )
+
+
     def delegate(self, task, state):
 
-        # 1. Schema Validation
-        try:                                                                            
-            request = self.validator.validate(
-                task
+        try:
+
+            request = (
+                self.validator.validate(
+                    task
+                )
             )
 
         except ValidationError as exc:
@@ -51,18 +61,190 @@ class Supervisor:
                 "errors": exc.errors(),
             }
 
-        # 2. Workflow Check
+        decision = self._check_security(
+            request,
+            state,
+            approval_granted=False,
+        )
+
+        if decision["decision"] == "DENY":
+
+            return {
+                "status": "DENIED",
+                "reason": decision["reason"],
+            }
+
+        if (
+            decision["decision"]
+            == "CONFIRM"
+        ):
+
+            pending = (
+                self.approval_store.create(
+                    task
+                )
+            )
+
+            task.status = (
+                "WAITING_CONFIRMATION"
+            )
+
+            return {
+                "status":
+                    "WAITING_CONFIRMATION",
+
+                "reason":
+                    "POLICY_CONFIRM",
+
+                "action_id":
+                    pending.action_id,
+            }
+
+        return self._execute(
+            execution_task=task,
+            state_task=task,
+            state=state,
+            agent_info=decision[
+                "agent_info"
+            ],
+        )
+
+
+    def approve(
+        self,
+        action_id,
+        state,
+    ):
+
+        pending = (
+            self.approval_store.get(
+                action_id
+            )
+        )
+
+        if pending is None:
+
+            return {
+                "status": "DENIED",
+                "reason":
+                    "UNKNOWN_PENDING_ACTION",
+            }
+
+        if (
+            pending.status
+            != "WAITING_CONFIRMATION"
+        ):
+
+            return {
+                "status": "DENIED",
+                "reason":
+                    "INVALID_APPROVAL_STATE",
+            }
+
+        pending = (
+            self.approval_store.approve(
+                action_id
+            )
+        )
+
+        snapshot = pending.snapshot
+
+        state_task = (
+            self._find_state_task(
+                state,
+                snapshot.id,
+            )
+        )
+
+        if state_task is None:
+
+            self.approval_store.mark_rejected(
+                action_id
+            )
+
+            return {
+                "status": "DENIED",
+                "reason": "TASK_NOT_FOUND",
+            }
+
+        if not self._matches_snapshot(
+            state_task,
+            snapshot,
+        ):
+
+            state_task.status = "BLOCKED"
+
+            self.approval_store.mark_rejected(
+                action_id
+            )
+
+            return {
+                "status": "DENIED",
+                "reason":
+                    "APPROVED_REQUEST_MISMATCH",
+            }
+
+        request = (
+            self.validator.validate(
+                snapshot
+            )
+        )
+
+        decision = self._check_security(
+            request,
+            state,
+            approval_granted=True,
+        )
+
+        if decision["decision"] == "DENY":
+
+            state_task.status = "BLOCKED"
+
+            self.approval_store.mark_rejected(
+                action_id
+            )
+
+            return {
+                "status": "DENIED",
+                "reason": decision["reason"],
+            }
+
+        result = self._execute(
+            execution_task=snapshot,
+            state_task=state_task,
+            state=state,
+            agent_info=decision[
+                "agent_info"
+            ],
+        )
+
+        self.approval_store.mark_executed(
+            action_id
+        )
+
+        return result
+
+
+    def _check_security(
+        self,
+        request,
+        state,
+        approval_granted,
+    ):
+
+        # Workflow
         if not self.workflow.is_allowed(
             state.phase,
             request.action,
         ):
 
             return {
-                "status": "DENIED",
-                "reason": "ACTION_NOT_ALLOWED_IN_PHASE",
+                "decision": "DENY",
+                "reason":
+                    "ACTION_NOT_ALLOWED_IN_PHASE",
             }
 
-        # 3. Agent Lookup
+        # Registry
         agent_info = self.registry.get(
             request.agent
         )
@@ -70,21 +252,22 @@ class Supervisor:
         if agent_info is None:
 
             return {
-                "status": "DENIED",
+                "decision": "DENY",
                 "reason": "UNKNOWN_AGENT",
             }
 
-        # 4. Capability Check
-        if request.action not in agent_info[
-            "capabilities"
-        ]:
+        # Capability
+        if request.action not in (
+            agent_info["capabilities"]
+        ):
 
             return {
-                "status": "DENIED",
-                "reason": "CAPABILITY_NOT_ALLOWED",
+                "decision": "DENY",
+                "reason":
+                    "CAPABILITY_NOT_ALLOWED",
             }
 
-        # 5. Policy
+        # Policy
         policy_decision = (
             self.policy.evaluate(
                 request.action
@@ -94,51 +277,106 @@ class Supervisor:
         if policy_decision == "DENY":
 
             return {
-                "status": "DENIED",
+                "decision": "DENY",
                 "reason": "POLICY_DENIED",
             }
 
-        # 6. Scope
+        if policy_decision not in {
+            "ALLOW",
+            "CONFIRM",
+        }:
+
+            return {
+                "decision": "DENY",
+                "reason": "POLICY_DENIED",
+            }
+
+        # Scope
         if not self.scope.is_allowed(
             request.target,
             state.target,
         ):
 
             return {
-                "status": "DENIED",
-                "reason": "TARGET_OUT_OF_SCOPE",
+                "decision": "DENY",
+                "reason":
+                    "TARGET_OUT_OF_SCOPE",
             }
 
-        # 7. HITL Gate
-        if policy_decision == "CONFIRM":
+        # HITL
+        if (
+            policy_decision == "CONFIRM"
+            and not approval_granted
+        ):
 
             return {
-                "status": "WAITING_CONFIRMATION",
-                "reason": "POLICY_CONFIRM",
+                "decision": "CONFIRM",
+                "agent_info": agent_info,
             }
 
-        # 8. Execution
-        task.status = "RUNNING"
+        return {
+            "decision": "ALLOW",
+            "agent_info": agent_info,
+        }
+
+
+    def _execute(
+        self,
+        execution_task,
+        state_task,
+        state,
+        agent_info,
+    ):
+
+        state_task.status = "RUNNING"
 
         try:
 
             result = agent_info[
                 "instance"
-            ].run(task)
+            ].run(
+                execution_task
+            )
 
         except Exception as exc:
 
-            task.status = "FAILED"
+            state_task.status = "FAILED"
 
             return {
                 "status": "FAILED",
                 "reason": str(exc),
             }
 
-        # 9. Observation
         state.add_observation(result)
 
-        # 10. Complete
-        task.status = "COMPLETED"
+        state_task.status = "COMPLETED"
 
         return result
+
+
+    def _find_state_task(
+        self,
+        state,
+        task_id,
+    ):
+
+        for task in state.tasks:
+
+            if task.id == task_id:
+                return task
+
+        return None
+
+
+    def _matches_snapshot(
+        self,
+        task,
+        snapshot,
+    ):
+
+        return (
+            task.id == snapshot.id
+            and task.agent == snapshot.agent
+            and task.action == snapshot.action
+            and task.target == snapshot.target
+        )
