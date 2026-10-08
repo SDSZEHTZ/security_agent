@@ -6,8 +6,12 @@ from unittest.mock import Mock
 from agents.code_analysis import CodeAnalysisAgent
 from agents.verification import VerificationAgent
 from main import main
+from models.finding import Finding
+from models.observation import Observation
 from models.task import Task
+from runtime.policy import PolicyEngine
 from runtime.registry import AgentRegistry
+from runtime.state_manager import StateManager
 from runtime.supervisor import Supervisor
 from state import AgentState
 
@@ -20,7 +24,12 @@ class StateTests(unittest.TestCase):
     def test_state_defaults_and_mutations(self):
         state = AgentState("./demo_app")
         task = Task("T1", "CodeAnalysisAgent", "analyze_code", state.target)
-        observation = {"task_id": task.id}
+        observation = Observation(
+            agent="CodeAnalysisAgent",
+            task_id=task.id,
+            execution_status="SUCCESS",
+            data={},
+        )
 
         self.assertEqual(state.target, "./demo_app")
         self.assertEqual(state.phase, "ANALYZE")
@@ -30,7 +39,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(state.evidence, [])
 
         state.add_task(task)
-        state.add_observation(observation)
+        StateManager().add_observation(state, observation)
         self.assertIs(state.tasks[0], task)
         self.assertIs(state.observations[0], observation)
 
@@ -94,8 +103,9 @@ class SupervisorTests(unittest.TestCase):
         result = self.supervisor.delegate(self.task, self.state)
 
         agent.run.assert_called_once_with(self.task)
-        self.assertIs(result, observation)
-        self.assertIs(self.state.observations[0], observation)
+        self.assertIsInstance(result, Observation)
+        self.assertEqual(result.model_dump(), observation)
+        self.assertIs(self.state.observations[0], result)
         self.assertEqual(self.task.status, "COMPLETED")
         self.assertEqual(self.state.tasks, [self.task])
         self.assertEqual(self.state.tasks[0].status, "COMPLETED")
@@ -146,15 +156,15 @@ class SupervisorTests(unittest.TestCase):
             self.state.phase = "VERIFY"
             verification_result = self.supervisor.delegate(verification, self.state)
 
-        self.assertEqual(analysis_result["agent"], "CodeAnalysisAgent")
-        self.assertEqual(analysis_result["task_id"], "T1")
-        self.assertEqual(analysis_result["execution_status"], "SUCCESS")
+        self.assertEqual(analysis_result.agent, "CodeAnalysisAgent")
+        self.assertEqual(analysis_result.task_id, "T1")
+        self.assertEqual(analysis_result.execution_status, "SUCCESS")
         self.assertEqual(
-            analysis_result["data"]["potential_findings"], ["SQL Injection"]
+            analysis_result.data["potential_findings"], ["SQL Injection"]
         )
-        self.assertEqual(verification_result["agent"], "VerificationAgent")
-        self.assertEqual(verification_result["task_id"], "T2")
-        self.assertEqual(verification_result["execution_status"], "SUCCESS")
+        self.assertEqual(verification_result.agent, "VerificationAgent")
+        self.assertEqual(verification_result.task_id, "T2")
+        self.assertEqual(verification_result.execution_status, "SUCCESS")
         self.assertEqual(self.task.status, "COMPLETED")
         self.assertEqual(verification.status, "COMPLETED")
         self.assertEqual(
@@ -293,6 +303,7 @@ class SecurityControlTests(unittest.TestCase):
             "verify_ssrf",
             self.state.target,
         )
+        self.state.add_task(task)
 
         result = self.supervisor.delegate(task, self.state)
 
@@ -374,6 +385,7 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(pending.snapshot.agent, "VerificationAgent")
         self.assertEqual(pending.snapshot.action, "verify_ssrf")
         self.assertEqual(pending.snapshot.target, "./demo_app")
+        self.assertIsNone(pending.snapshot.finding_id)
         self.assertEqual(self.task.status, "WAITING_CONFIRMATION")
         self.agent.run.assert_not_called()
         self.assertEqual(self.state.observations, [])
@@ -396,7 +408,8 @@ class ApprovalTests(unittest.TestCase):
             self.state,
         )
 
-        self.assertIs(result, observation)
+        self.assertIsInstance(result, Observation)
+        self.assertEqual(result.model_dump(), observation)
         self.agent.run.assert_called_once()
         executed_request = self.agent.run.call_args.args[0]
         self.assertIsNot(executed_request, self.task)
@@ -405,7 +418,7 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(executed_request.action, "verify_ssrf")
         self.assertEqual(executed_request.target, "./demo_app")
         self.assertEqual(self.task.status, "COMPLETED")
-        self.assertEqual(self.state.observations, [observation])
+        self.assertEqual(self.state.observations, [result])
         self.assertEqual(
             self.supervisor.approval_store.get("A001").status,
             "EXECUTED",
@@ -523,6 +536,75 @@ class ApprovalTests(unittest.TestCase):
             "REJECTED",
         )
 
+    def test_approval_snapshot_protects_finding_relationship(self):
+        finding = Finding(
+            id="F1",
+            finding_type="SSRF",
+            target=self.state.target,
+        )
+        self.supervisor.state_manager.add_finding(self.state, finding)
+        self.task.finding_id = finding.id
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+        action_id = pending_result["action_id"]
+        self.assertEqual(
+            self.supervisor.approval_store.get(action_id).snapshot.finding_id,
+            "F1",
+        )
+        self.task.finding_id = "F2"
+
+        result = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "DENIED",
+                "reason": "APPROVED_REQUEST_MISMATCH",
+            },
+        )
+        self.agent.run.assert_not_called()
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(
+            self.supervisor.approval_store.get(action_id).status,
+            "REJECTED",
+        )
+
+    def test_approval_rejects_missing_finding_before_execution(self):
+        finding = Finding(
+            id="F1",
+            finding_type="SSRF",
+            target=self.state.target,
+        )
+        self.supervisor.state_manager.add_finding(self.state, finding)
+        self.task.finding_id = finding.id
+        pending_result = self.supervisor.delegate(
+            self.task,
+            self.state,
+        )
+        action_id = pending_result["action_id"]
+        self.state.findings.clear()
+
+        result = self.supervisor.approve(
+            action_id,
+            self.state,
+        )
+
+        self.assertEqual(
+            result,
+            {"status": "DENIED", "reason": "UNKNOWN_FINDING"},
+        )
+        self.agent.run.assert_not_called()
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(
+            self.supervisor.approval_store.get(action_id).status,
+            "REJECTED",
+        )
+
     def test_approval_cannot_be_replayed(self):
         self.agent.run.return_value = {
             "agent": "VerificationAgent",
@@ -545,7 +627,7 @@ class ApprovalTests(unittest.TestCase):
             self.state,
         )
 
-        self.assertEqual(first["execution_status"], "SUCCESS")
+        self.assertEqual(first.execution_status, "SUCCESS")
         self.assertEqual(
             second,
             {
@@ -600,18 +682,249 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(self.state.observations, [])
 
 
+class EvidencePipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.state = AgentState("./demo_app")
+        self.state.phase = "VERIFY"
+        self.registry = AgentRegistry()
+        self.agent = Mock()
+        self.registry.register(
+            "VerificationAgent",
+            self.agent,
+            ["verify_sqli", "verify_ssrf"],
+        )
+        self.supervisor = Supervisor(
+            self.registry,
+            policy=PolicyEngine(
+                {
+                    "verify_sqli": "ALLOW",
+                    "verify_ssrf": "ALLOW",
+                }
+            ),
+        )
+
+    def add_finding_task(self, action="verify_sqli"):
+        finding_type = "SQL Injection" if action == "verify_sqli" else "SSRF"
+        finding = Finding(
+            id="F1",
+            finding_type=finding_type,
+            target=self.state.target,
+        )
+        task = Task(
+            "T2",
+            "VerificationAgent",
+            action,
+            self.state.target,
+            finding_id=finding.id,
+        )
+        self.supervisor.state_manager.add_finding(self.state, finding)
+        self.state.add_task(task)
+        return finding, task
+
+    def test_medium_sqli_evidence_leaves_finding_unconfirmed(self):
+        finding, task = self.add_finding_task()
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T2",
+            "execution_status": "SUCCESS",
+            "data": {
+                "status_code": 500,
+                "response": "Database error: SQL syntax error",
+            },
+        }
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertIsInstance(result, Observation)
+        self.assertEqual(task.status, "COMPLETED")
+        self.assertEqual(finding.status, "UNCONFIRMED")
+        self.assertEqual(len(self.state.evidence), 1)
+        self.assertEqual(self.state.evidence[0].evidence_type, "SQL_ERROR_SIGNAL")
+        self.assertEqual(self.state.evidence[0].strength, "MEDIUM")
+
+    def test_strong_sqli_evidence_confirms_finding(self):
+        finding, task = self.add_finding_task()
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T2",
+            "execution_status": "SUCCESS",
+            "data": {"boolean_difference": True},
+        }
+
+        self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(task.status, "COMPLETED")
+        self.assertEqual(finding.status, "CONFIRMED")
+        self.assertEqual(self.state.evidence[0].strength, "STRONG")
+
+    def test_weak_ssrf_evidence_leaves_finding_unconfirmed(self):
+        finding, task = self.add_finding_task("verify_ssrf")
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T2",
+            "execution_status": "SUCCESS",
+            "data": {
+                "request_completed": True,
+                "callback_received": False,
+            },
+        }
+
+        self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(finding.status, "UNCONFIRMED")
+        self.assertEqual(self.state.evidence[0].evidence_type, "REQUEST_COMPLETED")
+        self.assertEqual(self.state.evidence[0].strength, "WEAK")
+
+    def test_no_evidence_is_unconfirmed_not_rejected(self):
+        finding, task = self.add_finding_task()
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T2",
+            "execution_status": "SUCCESS",
+            "data": {"status_code": 200},
+        }
+
+        self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(task.status, "COMPLETED")
+        self.assertEqual(finding.status, "UNCONFIRMED")
+        self.assertEqual(self.state.evidence, [])
+
+    def test_invalid_observation_never_enters_state(self):
+        finding, task = self.add_finding_task()
+        self.agent.run.return_value = {"invalid": True}
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["reason"], "INVALID_OBSERVATION")
+        self.assertEqual(task.status, "FAILED")
+        self.assertEqual(finding.status, "POTENTIAL")
+        self.assertEqual(self.state.observations, [])
+        self.assertEqual(self.state.evidence, [])
+
+    def test_observation_with_unauthorized_fields_is_rejected(self):
+        finding, task = self.add_finding_task()
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T2",
+            "execution_status": "SUCCESS",
+            "data": {},
+            "finding_status": "CONFIRMED",
+        }
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["reason"], "INVALID_OBSERVATION")
+        self.assertEqual(task.status, "FAILED")
+        self.assertEqual(finding.status, "POTENTIAL")
+        self.assertEqual(self.state.observations, [])
+        self.assertEqual(self.state.evidence, [])
+
+    def test_observation_must_belong_to_executed_task(self):
+        finding, task = self.add_finding_task()
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T999",
+            "execution_status": "SUCCESS",
+            "data": {"boolean_difference": True},
+        }
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(
+            result,
+            {"status": "FAILED", "reason": "OBSERVATION_MISMATCH"},
+        )
+        self.assertEqual(task.status, "FAILED")
+        self.assertEqual(finding.status, "POTENTIAL")
+        self.assertEqual(self.state.observations, [])
+        self.assertEqual(self.state.evidence, [])
+
+    def test_failed_observation_produces_no_security_evidence(self):
+        finding, task = self.add_finding_task()
+        self.agent.run.return_value = {
+            "agent": "VerificationAgent",
+            "task_id": "T2",
+            "execution_status": "FAILED",
+            "data": {"boolean_difference": True},
+        }
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertIsInstance(result, Observation)
+        self.assertEqual(task.status, "FAILED")
+        self.assertEqual(finding.status, "POTENTIAL")
+        self.assertEqual(self.state.observations, [result])
+        self.assertEqual(self.state.evidence, [])
+
+    def test_unknown_finding_stops_before_agent_execution(self):
+        task = Task(
+            "T2",
+            "VerificationAgent",
+            "verify_sqli",
+            self.state.target,
+            finding_id="F999",
+        )
+        self.state.add_task(task)
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(result, {"status": "FAILED", "reason": "UNKNOWN_FINDING"})
+        self.assertEqual(task.status, "FAILED")
+        self.agent.run.assert_not_called()
+
+
+class StateManagerTests(unittest.TestCase):
+    def setUp(self):
+        self.state = AgentState("./demo_app")
+        self.manager = StateManager()
+
+    def test_confirmed_finding_cannot_return_to_potential(self):
+        finding = Finding(
+            id="F1",
+            finding_type="SQL Injection",
+            target=self.state.target,
+            status="CONFIRMED",
+        )
+        self.manager.add_finding(self.state, finding)
+
+        with self.assertRaisesRegex(ValueError, "INVALID_FINDING_TRANSITION"):
+            self.manager.update_finding_status(self.state, "F1", "POTENTIAL")
+
+    def test_unconfirmed_finding_can_later_be_confirmed(self):
+        finding = Finding(
+            id="F1",
+            finding_type="SQL Injection",
+            target=self.state.target,
+            status="UNCONFIRMED",
+        )
+        self.manager.add_finding(self.state, finding)
+
+        self.manager.update_finding_status(self.state, "F1", "CONFIRMED")
+
+        self.assertEqual(finding.status, "CONFIRMED")
+
+
 class MainTests(unittest.TestCase):
-    def test_demo_prints_completed_task_and_observation(self):
+    def test_demo_prints_evidence_pipeline(self):
         output = io.StringIO()
         with redirect_stdout(output):
             main()
 
         text = output.getvalue()
-        self.assertIn("[CodeAnalysisAgent] analyzing: ./demo_app", text)
+        self.assertIn(
+            "[VerificationAgent] verifying: verify_sqli -> ./demo_app",
+            text,
+        )
         self.assertIn("=== Result ===", text)
         self.assertIn("=== Task Status ===\nCOMPLETED", text)
         self.assertIn("=== Observations ===", text)
-        self.assertIn('"potential_findings": [', text)
+        self.assertIn("=== Evidence ===", text)
+        self.assertIn('"evidence_type": "SQL_ERROR_SIGNAL"', text)
+        self.assertIn("=== Findings ===", text)
+        self.assertIn('"status": "UNCONFIRMED"', text)
 
 
 if __name__ == "__main__":

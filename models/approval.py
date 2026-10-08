@@ -20,6 +20,8 @@ class ApprovalSnapshot(BaseModel):
 
     target: str = Field(min_length=1)
 
+    finding_id: str | None = None
+
 
 class PendingAction(BaseModel):
 

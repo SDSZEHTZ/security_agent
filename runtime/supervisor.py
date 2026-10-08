@@ -1,11 +1,16 @@
 from pydantic import ValidationError
 
 from runtime.approval import ApprovalStore
+from runtime.evidence import EvidenceExtractor
+from runtime.evaluator import FindingEvaluator
 from runtime.policy import PolicyEngine
 from runtime.scope import ScopeEngine
-from runtime.validator import RequestValidator
+from runtime.state_manager import StateManager
+from runtime.validator import (
+    ObservationValidator,
+    RequestValidator,
+)
 from runtime.workflow import WorkflowEngine
-
 
 class Supervisor:
 
@@ -13,10 +18,14 @@ class Supervisor:
         self,
         registry,
         validator=None,
+        observation_validator=None,
         workflow=None,
         policy=None,
         scope=None,
         approval_store=None,
+        state_manager=None,
+        evidence_extractor=None,
+        finding_evaluator=None,
     ):
 
         self.registry = registry
@@ -40,6 +49,26 @@ class Supervisor:
         self.approval_store = (
             approval_store
             or ApprovalStore()
+        )
+
+        self.observation_validator = (
+            observation_validator
+            or ObservationValidator()
+        )
+
+        self.state_manager = (
+            state_manager
+            or StateManager()
+        )
+
+        self.evidence_extractor = (
+            evidence_extractor
+            or EvidenceExtractor()
+        )
+
+        self.finding_evaluator = (
+            finding_evaluator
+            or FindingEvaluator()
         )
 
 
@@ -85,8 +114,10 @@ class Supervisor:
                 )
             )
 
-            task.status = (
-                "WAITING_CONFIRMATION"
+            self.state_manager.update_task_status(
+                state,
+                task.id,
+                "WAITING_CONFIRMATION",
             )
 
             return {
@@ -150,7 +181,7 @@ class Supervisor:
         snapshot = pending.snapshot
 
         state_task = (
-            self._find_state_task(
+            self.state_manager.find_task(
                 state,
                 snapshot.id,
             )
@@ -172,7 +203,11 @@ class Supervisor:
             snapshot,
         ):
 
-            state_task.status = "BLOCKED"
+            self.state_manager.update_task_status(
+                state,
+                state_task.id,
+                "BLOCKED",
+            )
 
             self.approval_store.mark_rejected(
                 action_id
@@ -198,7 +233,11 @@ class Supervisor:
 
         if decision["decision"] == "DENY":
 
-            state_task.status = "BLOCKED"
+            self.state_manager.update_task_status(
+                state,
+                state_task.id,
+                "BLOCKED",
+            )
 
             self.approval_store.mark_rejected(
                 action_id
@@ -207,6 +246,30 @@ class Supervisor:
             return {
                 "status": "DENIED",
                 "reason": decision["reason"],
+            }
+
+        if (
+            state_task.finding_id is not None
+            and self.state_manager.find_finding(
+                state,
+                state_task.finding_id,
+            )
+            is None
+        ):
+
+            self.state_manager.update_task_status(
+                state,
+                state_task.id,
+                "BLOCKED",
+            )
+
+            self.approval_store.mark_rejected(
+                action_id
+            )
+
+            return {
+                "status": "DENIED",
+                "reason": "UNKNOWN_FINDING",
             }
 
         result = self._execute(
@@ -328,7 +391,33 @@ class Supervisor:
         agent_info,
     ):
 
-        state_task.status = "RUNNING"
+        finding = None
+
+        if state_task.finding_id is not None:
+
+            finding = self.state_manager.find_finding(
+                state,
+                state_task.finding_id,
+            )
+
+            if finding is None:
+
+                self.state_manager.update_task_status(
+                    state,
+                    state_task.id,
+                    "FAILED",
+                )
+
+                return {
+                    "status": "FAILED",
+                    "reason": "UNKNOWN_FINDING",
+                }
+
+        self.state_manager.update_task_status(
+            state,
+            state_task.id,
+            "RUNNING",
+        )
 
         try:
 
@@ -340,32 +429,107 @@ class Supervisor:
 
         except Exception as exc:
 
-            state_task.status = "FAILED"
+            self.state_manager.update_task_status(
+                state,
+                state_task.id,
+                "FAILED",
+            )
 
             return {
                 "status": "FAILED",
                 "reason": str(exc),
             }
 
-        state.add_observation(result)
+        try:
 
-        state_task.status = "COMPLETED"
+            observation = (
+                self.observation_validator
+                .validate(result)
+            )
 
-        return result
+        except ValidationError as exc:
 
+            self.state_manager.update_task_status(
+                state,
+                state_task.id,
+                "FAILED",
+            )
 
-    def _find_state_task(
-        self,
-        state,
-        task_id,
-    ):
+            return {
+                "status": "FAILED",
+                "reason": "INVALID_OBSERVATION",
+                "errors": exc.errors(),
+            }
 
-        for task in state.tasks:
+        if (
+            observation.agent
+            != execution_task.agent
+            or observation.task_id
+            != execution_task.id
+        ):
 
-            if task.id == task_id:
-                return task
+            self.state_manager.update_task_status(
+                state,
+                state_task.id,
+                "FAILED",
+            )
 
-        return None
+            return {
+                "status": "FAILED",
+                "reason": "OBSERVATION_MISMATCH",
+            }
+
+        self.state_manager.add_observation(
+            state,
+            observation,
+        )
+
+        if observation.execution_status != "SUCCESS":
+
+            self.state_manager.update_task_status(
+                state,
+                state_task.id,
+                observation.execution_status,
+            )
+
+            return observation
+
+        evidence_list = (
+            self.evidence_extractor.extract(
+                observation,
+                state_task,
+            )
+        )
+
+        for evidence in evidence_list:
+
+            self.state_manager.add_evidence(
+                state,
+                evidence,
+            )
+
+        if finding is not None:
+
+            new_status = (
+                self.finding_evaluator.evaluate(
+                    finding,
+                    state.evidence,
+                )
+            )
+
+            self.state_manager.update_finding_status(
+                state,
+                finding.id,
+                new_status,
+            )
+
+        self.state_manager.update_task_status(
+            state,
+            state_task.id,
+            "COMPLETED",
+        )
+
+        return observation
 
 
     def _matches_snapshot(
@@ -379,4 +543,5 @@ class Supervisor:
             and task.agent == snapshot.agent
             and task.action == snapshot.action
             and task.target == snapshot.target
+            and task.finding_id == snapshot.finding_id
         )

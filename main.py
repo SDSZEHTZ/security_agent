@@ -1,8 +1,8 @@
 import json
 
-from agents.code_analysis import CodeAnalysisAgent
 from agents.verification import VerificationAgent
 
+from models.finding import Finding
 from models.task import Task
 
 from runtime.registry import AgentRegistry
@@ -20,12 +20,6 @@ def main():
     registry = AgentRegistry()
 
     registry.register(
-        "CodeAnalysisAgent",
-        CodeAnalysisAgent(),
-        ["analyze_code"]
-    )
-
-    registry.register(
         "VerificationAgent",
         VerificationAgent(),
         [
@@ -38,11 +32,25 @@ def main():
         registry
     )
 
-    task = Task(
-        id="T1",
-        agent="CodeAnalysisAgent",
-        action="analyze_code",
+    state.phase = "VERIFY"
+
+    finding = Finding(
+        id="F1",
+        finding_type="SQL Injection",
         target=state.target,
+    )
+
+    supervisor.state_manager.add_finding(
+        state,
+        finding,
+    )
+
+    task = Task(
+        id="T2",
+        agent="VerificationAgent",
+        action="verify_sqli",
+        target=state.target,
+        finding_id=finding.id,
     )
 
     state.add_task(task)
@@ -53,13 +61,31 @@ def main():
     )
 
     print("\n=== Result ===")
-    print(json.dumps(result, indent=4, ensure_ascii=False))
+    print(json.dumps(result.model_dump(), indent=4, ensure_ascii=False))
 
     print("\n=== Task Status ===")
     print(task.status)
 
     print("\n=== Observations ===")
-    print(json.dumps(state.observations, indent=4, ensure_ascii=False))
+    print(json.dumps(
+        [item.model_dump() for item in state.observations],
+        indent=4,
+        ensure_ascii=False,
+    ))
+
+    print("\n=== Evidence ===")
+    print(json.dumps(
+        [item.model_dump() for item in state.evidence],
+        indent=4,
+        ensure_ascii=False,
+    ))
+
+    print("\n=== Findings ===")
+    print(json.dumps(
+        [item.model_dump() for item in state.findings],
+        indent=4,
+        ensure_ascii=False,
+    ))
 
 
 if __name__ == "__main__":
