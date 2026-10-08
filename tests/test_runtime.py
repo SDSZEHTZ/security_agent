@@ -143,6 +143,7 @@ class SupervisorTests(unittest.TestCase):
 
         with redirect_stdout(io.StringIO()):
             analysis_result = self.supervisor.delegate(self.task, self.state)
+            self.state.phase = "VERIFY"
             verification_result = self.supervisor.delegate(verification, self.state)
 
         self.assertEqual(analysis_result["agent"], "CodeAnalysisAgent")
@@ -161,6 +162,202 @@ class SupervisorTests(unittest.TestCase):
         )
         self.assertEqual(self.state.findings, [])
         self.assertEqual(self.state.evidence, [])
+
+
+class SecurityControlTests(unittest.TestCase):
+    def setUp(self):
+        self.state = AgentState("./demo_app")
+        self.registry = AgentRegistry()
+        self.supervisor = Supervisor(self.registry)
+
+    def test_invalid_action_schema_is_denied(self):
+        self.registry.get = Mock(wraps=self.registry.get)
+        task = Task(
+            "T1",
+            "CodeAnalysisAgent",
+            "destroy_everything",
+            self.state.target,
+        )
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(result["status"], "DENIED")
+        self.assertEqual(result["reason"], "INVALID_SCHEMA")
+        self.assertIn("errors", result)
+        self.registry.get.assert_not_called()
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_empty_required_fields_are_invalid_schema(self):
+        tasks = {
+            "id": Task("", "CodeAnalysisAgent", "analyze_code", self.state.target),
+            "agent": Task("T1", "", "analyze_code", self.state.target),
+            "target": Task("T1", "CodeAnalysisAgent", "analyze_code", ""),
+        }
+
+        for field, task in tasks.items():
+            with self.subTest(field=field):
+                result = self.supervisor.delegate(task, self.state)
+
+                self.assertEqual(result["status"], "DENIED")
+                self.assertEqual(result["reason"], "INVALID_SCHEMA")
+                self.assertEqual(task.status, "PENDING")
+
+    def test_wrong_phase_is_denied_without_running_agent(self):
+        agent = Mock()
+        self.registry.register(
+            "VerificationAgent",
+            agent,
+            ["verify_sqli"],
+        )
+        task = Task(
+            "T1",
+            "VerificationAgent",
+            "verify_sqli",
+            self.state.target,
+        )
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(
+            result,
+            {
+                "status": "DENIED",
+                "reason": "ACTION_NOT_ALLOWED_IN_PHASE",
+            },
+        )
+        agent.run.assert_not_called()
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_policy_deny_never_runs_agent(self):
+        self.state.phase = "VERIFY"
+        agent = Mock()
+        self.registry.register(
+            "VerificationAgent",
+            agent,
+            ["execute_command"],
+        )
+        task = Task(
+            "T1",
+            "VerificationAgent",
+            "execute_command",
+            self.state.target,
+        )
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(
+            result,
+            {"status": "DENIED", "reason": "POLICY_DENIED"},
+        )
+        agent.run.assert_not_called()
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_out_of_scope_never_runs_agent(self):
+        agent = Mock()
+        self.registry.register(
+            "CodeAnalysisAgent",
+            agent,
+            ["analyze_code"],
+        )
+        task = Task(
+            "T1",
+            "CodeAnalysisAgent",
+            "analyze_code",
+            "./other_app",
+        )
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(
+            result,
+            {"status": "DENIED", "reason": "TARGET_OUT_OF_SCOPE"},
+        )
+        agent.run.assert_not_called()
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_confirm_waits_without_execution(self):
+        self.state.phase = "VERIFY"
+        agent = Mock()
+        self.registry.register(
+            "VerificationAgent",
+            agent,
+            ["verify_ssrf"],
+        )
+        task = Task(
+            "T1",
+            "VerificationAgent",
+            "verify_ssrf",
+            self.state.target,
+        )
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(
+            result,
+            {
+                "status": "WAITING_CONFIRMATION",
+                "reason": "POLICY_CONFIRM",
+            },
+        )
+        agent.run.assert_not_called()
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_out_of_scope_confirm_action_is_denied_before_confirmation(self):
+        self.state.phase = "VERIFY"
+        agent = Mock()
+        self.registry.register(
+            "VerificationAgent",
+            agent,
+            ["verify_ssrf"],
+        )
+        task = Task(
+            "T1",
+            "VerificationAgent",
+            "verify_ssrf",
+            "./other_app",
+        )
+
+        result = self.supervisor.delegate(task, self.state)
+
+        self.assertEqual(
+            result,
+            {"status": "DENIED", "reason": "TARGET_OUT_OF_SCOPE"},
+        )
+        agent.run.assert_not_called()
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
+
+    def test_unknown_policy_decision_defaults_to_deny(self):
+        agent = Mock()
+        policy = Mock()
+        policy.evaluate.return_value = "ALOW"
+        supervisor = Supervisor(self.registry, policy=policy)
+        self.registry.register(
+            "CodeAnalysisAgent",
+            agent,
+            ["analyze_code"],
+        )
+        task = Task(
+            "T1",
+            "CodeAnalysisAgent",
+            "analyze_code",
+            self.state.target,
+        )
+
+        result = supervisor.delegate(task, self.state)
+
+        self.assertEqual(
+            result,
+            {"status": "DENIED", "reason": "POLICY_DENIED"},
+        )
+        agent.run.assert_not_called()
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(self.state.observations, [])
 
 
 class MainTests(unittest.TestCase):
