@@ -116,7 +116,8 @@ class SupervisorTests(unittest.TestCase):
         result = self.supervisor.delegate(self.task, self.state)
 
         self.assertEqual(result, {"status": "DENIED", "reason": "UNKNOWN_AGENT"})
-        self.assertEqual(self.task.status, "PENDING")
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
     def test_unsupported_capability_is_denied_without_running_agent(self):
@@ -129,7 +130,8 @@ class SupervisorTests(unittest.TestCase):
             result, {"status": "DENIED", "reason": "CAPABILITY_NOT_ALLOWED"}
         )
         agent.run.assert_not_called()
-        self.assertEqual(self.task.status, "PENDING")
+        self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
     def test_agent_exception_marks_task_failed(self):
@@ -195,7 +197,8 @@ class SecurityControlTests(unittest.TestCase):
         self.assertEqual(result["reason"], "INVALID_SCHEMA")
         self.assertIn("errors", result)
         self.registry.get.assert_not_called()
-        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.status, "BLOCKED")
+        self.assertEqual(task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
     def test_empty_required_fields_are_invalid_schema(self):
@@ -211,7 +214,8 @@ class SecurityControlTests(unittest.TestCase):
 
                 self.assertEqual(result["status"], "DENIED")
                 self.assertEqual(result["reason"], "INVALID_SCHEMA")
-                self.assertEqual(task.status, "PENDING")
+                self.assertEqual(task.status, "BLOCKED")
+                self.assertEqual(task.block_reason, result["reason"])
 
     def test_wrong_phase_is_denied_without_running_agent(self):
         agent = Mock()
@@ -237,7 +241,8 @@ class SecurityControlTests(unittest.TestCase):
             },
         )
         agent.run.assert_not_called()
-        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.status, "BLOCKED")
+        self.assertEqual(task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
     def test_policy_deny_never_runs_agent(self):
@@ -262,7 +267,8 @@ class SecurityControlTests(unittest.TestCase):
             {"status": "DENIED", "reason": "POLICY_DENIED"},
         )
         agent.run.assert_not_called()
-        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.status, "BLOCKED")
+        self.assertEqual(task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
     def test_out_of_scope_never_runs_agent(self):
@@ -286,7 +292,8 @@ class SecurityControlTests(unittest.TestCase):
             {"status": "DENIED", "reason": "TARGET_OUT_OF_SCOPE"},
         )
         agent.run.assert_not_called()
-        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.status, "BLOCKED")
+        self.assertEqual(task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
     def test_confirm_waits_without_execution(self):
@@ -341,7 +348,8 @@ class SecurityControlTests(unittest.TestCase):
             {"status": "DENIED", "reason": "TARGET_OUT_OF_SCOPE"},
         )
         agent.run.assert_not_called()
-        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.status, "BLOCKED")
+        self.assertEqual(task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
 
@@ -446,6 +454,7 @@ class ApprovalTests(unittest.TestCase):
         )
         self.agent.run.assert_not_called()
         self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(
             self.supervisor.approval_store.get(action_id).status,
             "REJECTED",
@@ -475,6 +484,7 @@ class ApprovalTests(unittest.TestCase):
         )
         self.agent.run.assert_not_called()
         self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(
             self.supervisor.approval_store.get(action_id).status,
             "REJECTED",
@@ -504,6 +514,7 @@ class ApprovalTests(unittest.TestCase):
         )
         self.agent.run.assert_not_called()
         self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(
             self.supervisor.approval_store.get(action_id).status,
             "REJECTED",
@@ -531,6 +542,7 @@ class ApprovalTests(unittest.TestCase):
         )
         self.agent.run.assert_not_called()
         self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(
             self.supervisor.approval_store.get(action_id).status,
             "REJECTED",
@@ -569,6 +581,7 @@ class ApprovalTests(unittest.TestCase):
         )
         self.agent.run.assert_not_called()
         self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(
             self.supervisor.approval_store.get(action_id).status,
             "REJECTED",
@@ -600,6 +613,7 @@ class ApprovalTests(unittest.TestCase):
         )
         self.agent.run.assert_not_called()
         self.assertEqual(self.task.status, "BLOCKED")
+        self.assertEqual(self.task.block_reason, result["reason"])
         self.assertEqual(
             self.supervisor.approval_store.get(action_id).status,
             "REJECTED",
@@ -678,7 +692,8 @@ class ApprovalTests(unittest.TestCase):
             {"status": "DENIED", "reason": "POLICY_DENIED"},
         )
         agent.run.assert_not_called()
-        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.status, "BLOCKED")
+        self.assertEqual(task.block_reason, result["reason"])
         self.assertEqual(self.state.observations, [])
 
 

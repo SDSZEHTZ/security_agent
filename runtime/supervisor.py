@@ -84,11 +84,12 @@ class Supervisor:
 
         except ValidationError as exc:
 
-            return {
-                "status": "DENIED",
-                "reason": "INVALID_SCHEMA",
-                "errors": exc.errors(),
-            }
+            result = self._deny_task(
+                task,
+                "INVALID_SCHEMA",
+            )
+            result["errors"] = exc.errors()
+            return result
 
         decision = self._check_security(
             request,
@@ -98,10 +99,10 @@ class Supervisor:
 
         if decision["decision"] == "DENY":
 
-            return {
-                "status": "DENIED",
-                "reason": decision["reason"],
-            }
+            return self._deny_task(
+                task,
+                decision["reason"],
+            )
 
         if (
             decision["decision"]
@@ -203,21 +204,14 @@ class Supervisor:
             snapshot,
         ):
 
-            self.state_manager.update_task_status(
-                state,
-                state_task.id,
-                "BLOCKED",
-            )
-
             self.approval_store.mark_rejected(
                 action_id
             )
 
-            return {
-                "status": "DENIED",
-                "reason":
-                    "APPROVED_REQUEST_MISMATCH",
-            }
+            return self._deny_task(
+                state_task,
+                "APPROVED_REQUEST_MISMATCH",
+            )
 
         request = (
             self.validator.validate(
@@ -233,20 +227,14 @@ class Supervisor:
 
         if decision["decision"] == "DENY":
 
-            self.state_manager.update_task_status(
-                state,
-                state_task.id,
-                "BLOCKED",
-            )
-
             self.approval_store.mark_rejected(
                 action_id
             )
 
-            return {
-                "status": "DENIED",
-                "reason": decision["reason"],
-            }
+            return self._deny_task(
+                state_task,
+                decision["reason"],
+            )
 
         if (
             state_task.finding_id is not None
@@ -257,20 +245,14 @@ class Supervisor:
             is None
         ):
 
-            self.state_manager.update_task_status(
-                state,
-                state_task.id,
-                "BLOCKED",
-            )
-
             self.approval_store.mark_rejected(
                 action_id
             )
 
-            return {
-                "status": "DENIED",
-                "reason": "UNKNOWN_FINDING",
-            }
+            return self._deny_task(
+                state_task,
+                "UNKNOWN_FINDING",
+            )
 
         result = self._execute(
             execution_task=snapshot,
@@ -286,6 +268,17 @@ class Supervisor:
         )
 
         return result
+
+
+    def _deny_task(self, task, reason):
+
+        task.status = "BLOCKED"
+        task.block_reason = reason
+
+        return {
+            "status": "DENIED",
+            "reason": reason,
+        }
 
 
     def _check_security(

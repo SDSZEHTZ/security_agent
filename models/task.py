@@ -1,9 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class Task:
-
     id: str
     agent: str
     action: str
@@ -11,4 +10,10 @@ class Task:
 
     status: str = "PENDING"
 
+    dependencies: list[str] = field(
+        default_factory=list
+    )
+
     finding_id: str | None = None
+
+    block_reason: str | None = None
