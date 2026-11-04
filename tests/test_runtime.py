@@ -91,8 +91,9 @@ class SupervisorTests(unittest.TestCase):
         }
 
         def run(task):
-            self.assertIs(task, self.task)
-            self.assertEqual(task.status, "RUNNING")
+            self.assertIsNot(task, self.task)
+            self.assertEqual(task.id, self.task.id)
+            self.assertEqual(self.task.status, "RUNNING")
             self.assertEqual(self.state.observations, [])
             return observation
 
@@ -102,7 +103,7 @@ class SupervisorTests(unittest.TestCase):
 
         result = self.supervisor.delegate(self.task, self.state)
 
-        agent.run.assert_called_once_with(self.task)
+        agent.run.assert_called_once()
         self.assertIsInstance(result, Observation)
         self.assertEqual(result.model_dump(), observation)
         self.assertIs(self.state.observations[0], result)
@@ -150,7 +151,7 @@ class SupervisorTests(unittest.TestCase):
     def test_both_mock_agents_run_through_runtime(self):
         self.registry.register("CodeAnalysisAgent", CodeAnalysisAgent(), ["analyze_code"])
         self.registry.register("VerificationAgent", VerificationAgent(), ["verify_sqli"])
-        verification = Task("T2", "VerificationAgent", "verify_sqli", self.state.target)
+        verification = Task("T2", "VerificationAgent", "verify_sqli", self.state.target, phase="VERIFY")
         self.state.add_task(verification)
 
         with redirect_stdout(io.StringIO()):
@@ -172,7 +173,8 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(
             self.state.observations, [analysis_result, verification_result]
         )
-        self.assertEqual(self.state.findings, [])
+        self.assertEqual(len(self.state.findings), 1)
+        self.assertEqual(self.state.findings[0].status, "POTENTIAL")
         self.assertEqual(self.state.evidence, [])
 
 
@@ -229,6 +231,7 @@ class SecurityControlTests(unittest.TestCase):
             "VerificationAgent",
             "verify_sqli",
             self.state.target,
+            phase="VERIFY",
         )
 
         result = self.supervisor.delegate(task, self.state)
@@ -258,6 +261,7 @@ class SecurityControlTests(unittest.TestCase):
             "VerificationAgent",
             "execute_command",
             self.state.target,
+            phase="VERIFY",
         )
 
         result = self.supervisor.delegate(task, self.state)
@@ -309,6 +313,7 @@ class SecurityControlTests(unittest.TestCase):
             "VerificationAgent",
             "verify_ssrf",
             self.state.target,
+            phase="VERIFY",
         )
         self.state.add_task(task)
 
@@ -339,6 +344,7 @@ class SecurityControlTests(unittest.TestCase):
             "VerificationAgent",
             "verify_ssrf",
             "./other_app",
+            phase="VERIFY",
         )
 
         result = self.supervisor.delegate(task, self.state)
@@ -370,6 +376,7 @@ class ApprovalTests(unittest.TestCase):
             "VerificationAgent",
             "verify_ssrf",
             self.state.target,
+            phase="VERIFY",
         )
         self.state.add_task(self.task)
 
@@ -731,6 +738,7 @@ class EvidencePipelineTests(unittest.TestCase):
             action,
             self.state.target,
             finding_id=finding.id,
+            phase="VERIFY",
         )
         self.supervisor.state_manager.add_finding(self.state, finding)
         self.state.add_task(task)
@@ -881,6 +889,7 @@ class EvidencePipelineTests(unittest.TestCase):
             "verify_sqli",
             self.state.target,
             finding_id="F999",
+            phase="VERIFY",
         )
         self.state.add_task(task)
 
@@ -934,7 +943,9 @@ class MainTests(unittest.TestCase):
             text,
         )
         self.assertIn("=== Result ===", text)
-        self.assertIn("=== Task Status ===\nCOMPLETED", text)
+        self.assertIn("=== Tasks ===", text)
+        for phase in ("ANALYZE", "VERIFY", "REPORT"):
+            self.assertIn(f'"phase": "{phase}"', text)
         self.assertIn("=== Observations ===", text)
         self.assertIn("=== Evidence ===", text)
         self.assertIn('"evidence_type": "SQL_ERROR_SIGNAL"', text)

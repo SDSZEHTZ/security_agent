@@ -1,8 +1,8 @@
-from models.task import Task
+from models.approval import ApprovalSnapshot
 
 
 class CodeAnalysisAgent:
-    def run(self, task: Task) -> dict:
+    def run(self, task: ApprovalSnapshot) -> dict:
         print(f"[CodeAnalysisAgent] analyzing: {task.target}")
         return {
             "agent": "CodeAnalysisAgent",

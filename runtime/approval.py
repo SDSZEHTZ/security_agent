@@ -11,11 +11,12 @@ class ApprovalStore:
     def __init__(self):
 
         self.actions = {}
+        self._owners = {}
 
         self._next_id = 1
 
 
-    def create(self, task):
+    def create(self, task, state):
 
         copied_task = deepcopy(task)
 
@@ -37,8 +38,12 @@ class ApprovalStore:
         )
 
         self.actions[action_id] = pending
+        self._owners[action_id] = state
 
         return pending
+
+    def belongs_to(self, action_id, state):
+        return self._owners.get(action_id) is state
 
 
     def get(self, action_id):

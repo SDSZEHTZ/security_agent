@@ -7,9 +7,13 @@ class TaskScheduler:
     def validate_graph(self, state):
 
         task_map = {}
+        phases = {"ANALYZE": 0, "VERIFY": 1, "REPORT": 2}
 
         # 1. Duplicate task IDs
         for task in state.tasks:
+
+            if task.phase not in phases:
+                raise TaskGraphError(f"INVALID_TASK_PHASE: {task.id}")
 
             if task.id in task_map:
 
@@ -36,6 +40,9 @@ class TaskScheduler:
                     raise TaskGraphError(
                         f"SELF_DEPENDENCY: {task.id}"
                     )
+
+                if phases[task_map[dependency_id].phase] > phases[task.phase]:
+                    raise TaskGraphError(f"FUTURE_PHASE_DEPENDENCY: {task.id}")
 
         # 3. Cycle detection
         visited = set()
@@ -89,6 +96,9 @@ class TaskScheduler:
                 if task.status != "PENDING":
                     continue
 
+                if task.phase != state.phase:
+                    continue
+
                 dependencies = [
                     task_map[dependency_id]
                     for dependency_id
@@ -97,7 +107,7 @@ class TaskScheduler:
 
                 if any(
                     dependency.status
-                    in {"FAILED", "BLOCKED"}
+                    in {"FAILED", "BLOCKED", "TIMEOUT"}
                     for dependency
                     in dependencies
                 ):
@@ -125,5 +135,5 @@ class TaskScheduler:
         return [
             task
             for task in state.tasks
-            if task.status == "READY"
+            if task.status == "READY" and task.phase == state.phase
         ]

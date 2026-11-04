@@ -137,3 +137,41 @@ class StateManager:
                 return finding
 
         return None
+
+    def add_task(self, state, task):
+        state.tasks.append(task)
+
+    def mark_phase_planned(self, state, phase):
+        if phase != state.phase or phase not in {"ANALYZE", "VERIFY", "REPORT"}:
+            raise ValueError("INVALID_PLAN_PHASE")
+        state.planned_phases.add(phase)
+
+    def update_phase(self, state, phase):
+        from runtime.phase_manager import PhaseManager
+
+        manager = PhaseManager()
+        if not manager.can_advance(state) or manager.next_phase(state.phase) != phase:
+            raise ValueError("INVALID_PHASE_TRANSITION")
+        state.phase = phase
+
+    def record_potential_findings(self, state, task, observation):
+        """Only runtime creates finding IDs, targets and initial statuses."""
+        from models.finding import Finding
+
+        if task.action != "analyze_code" or observation.execution_status != "SUCCESS":
+            return
+        candidates = observation.data.get("potential_findings", [])
+        if not isinstance(candidates, list):
+            return
+        for candidate in candidates[:10]:
+            if not isinstance(candidate, str) or candidate not in {"SQL Injection", "SSRF"}:
+                continue
+            if any(f.finding_type == candidate and f.target == task.target for f in state.findings):
+                continue
+            existing_ids = {f.id for f in state.findings}
+            number = 1
+            while f"F{number}" in existing_ids:
+                number += 1
+            self.add_finding(state, Finding(
+                id=f"F{number}", finding_type=candidate, target=task.target,
+            ))

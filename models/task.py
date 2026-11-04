@@ -17,3 +17,5 @@ class Task:
     finding_id: str | None = None
 
     block_reason: str | None = None
+
+    phase: str = "ANALYZE"

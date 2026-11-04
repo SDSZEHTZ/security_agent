@@ -159,10 +159,11 @@ class RunnerTests(unittest.TestCase):
         self.registry.register(
             "VerificationAgent", self.agent, ["verify_ssrf", "verify_sqli"],
         )
-        root = Task("T1", "VerificationAgent", "verify_ssrf", self.state.target)
+        root = Task("T1", "VerificationAgent", "verify_ssrf", self.state.target, phase="VERIFY")
         child = Task(
             "T2", "VerificationAgent", "verify_sqli", self.state.target,
             dependencies=["T1"],
+            phase="VERIFY",
         )
         self.state.tasks = [child, root]
         results = self.runner.run_until_blocked(self.state)

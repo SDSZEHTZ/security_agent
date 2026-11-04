@@ -22,6 +22,10 @@ class ApprovalSnapshot(BaseModel):
 
     finding_id: str | None = None
 
+    phase: Literal["ANALYZE", "VERIFY", "REPORT"] = "ANALYZE"
+
+    dependencies: tuple[str, ...] = ()
+
 
 class PendingAction(BaseModel):
 

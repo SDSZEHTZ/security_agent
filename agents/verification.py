@@ -1,8 +1,8 @@
-from models.task import Task
+from models.approval import ApprovalSnapshot
 
 
 class VerificationAgent:
-    def run(self, task: Task) -> dict:
+    def run(self, task: ApprovalSnapshot) -> dict:
         print(f"[VerificationAgent] verifying: {task.action} -> {task.target}")
 
         if task.action == "verify_sqli":

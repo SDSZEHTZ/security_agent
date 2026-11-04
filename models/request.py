@@ -26,3 +26,5 @@ class TaskRequest(BaseModel):
     action: Action
 
     target: str = Field(min_length=1)
+
+    phase: Literal["ANALYZE", "VERIFY", "REPORT"] = "ANALYZE"

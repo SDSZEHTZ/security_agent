@@ -1,8 +1,10 @@
 from pydantic import ValidationError
+from models.approval import ApprovalSnapshot
 
 from runtime.approval import ApprovalStore
 from runtime.evidence import EvidenceExtractor
 from runtime.evaluator import FindingEvaluator
+from runtime.finding_rules import finding_error
 from runtime.policy import PolicyEngine
 from runtime.scope import ScopeEngine
 from runtime.state_manager import StateManager
@@ -91,6 +93,10 @@ class Supervisor:
             result["errors"] = exc.errors()
             return result
 
+        # Reject repeated dispatch without damaging completed or waiting tasks.
+        if task.status not in {"PENDING", "READY"}:
+            return {"status": "DENIED", "reason": "INVALID_TASK_STATE"}
+
         decision = self._check_security(
             request,
             state,
@@ -104,6 +110,17 @@ class Supervisor:
                 decision["reason"],
             )
 
+        error = self._task_error(task, state)
+        if error:
+            return self._deny_task(task, error)
+
+        error = finding_error(task, state)
+        if error:
+            if error == "UNKNOWN_FINDING":
+                self.state_manager.update_task_status(state, task.id, "FAILED")
+                return {"status": "FAILED", "reason": error}
+            return self._deny_task(task, error)
+
         if (
             decision["decision"]
             == "CONFIRM"
@@ -111,7 +128,7 @@ class Supervisor:
 
             pending = (
                 self.approval_store.create(
-                    task
+                    task, state
                 )
             )
 
@@ -133,7 +150,7 @@ class Supervisor:
             }
 
         return self._execute(
-            execution_task=task,
+            execution_task=ApprovalSnapshot.model_validate(task),
             state_task=task,
             state=state,
             agent_info=decision[
@@ -161,6 +178,9 @@ class Supervisor:
                 "reason":
                     "UNKNOWN_PENDING_ACTION",
             }
+
+        if not self.approval_store.belongs_to(action_id, state):
+            return {"status": "DENIED", "reason": "APPROVAL_STATE_MISMATCH"}
 
         if (
             pending.status
@@ -199,6 +219,10 @@ class Supervisor:
                 "reason": "TASK_NOT_FOUND",
             }
 
+        if state_task.status != "WAITING_CONFIRMATION":
+            self.approval_store.mark_rejected(action_id)
+            return {"status": "DENIED", "reason": "INVALID_TASK_STATE"}
+
         if not self._matches_snapshot(
             state_task,
             snapshot,
@@ -236,23 +260,10 @@ class Supervisor:
                 decision["reason"],
             )
 
-        if (
-            state_task.finding_id is not None
-            and self.state_manager.find_finding(
-                state,
-                state_task.finding_id,
-            )
-            is None
-        ):
-
-            self.approval_store.mark_rejected(
-                action_id
-            )
-
-            return self._deny_task(
-                state_task,
-                "UNKNOWN_FINDING",
-            )
+        error = self._task_error(state_task, state) or finding_error(snapshot, state)
+        if error:
+            self.approval_store.mark_rejected(action_id)
+            return self._deny_task(state_task, error)
 
         result = self._execute(
             execution_task=snapshot,
@@ -301,6 +312,9 @@ class Supervisor:
             }
 
         # Registry
+        if request.phase != state.phase:
+            return {"decision": "DENY", "reason": "TASK_PHASE_MISMATCH"}
+
         agent_info = self.registry.get(
             request.agent
         )
@@ -374,6 +388,16 @@ class Supervisor:
             "decision": "ALLOW",
             "agent_info": agent_info,
         }
+
+    def _task_error(self, task, state):
+        matches = [item for item in state.tasks if item.id == task.id]
+        if len(matches) != 1 or matches[0] is not task:
+            return "TASK_NOT_OWNED_BY_RUNTIME"
+        for dependency_id in task.dependencies:
+            dependencies = [item for item in state.tasks if item.id == dependency_id]
+            if len(dependencies) != 1 or dependencies[0].status != "COMPLETED":
+                return "DEPENDENCY_NOT_COMPLETED"
+        return None
 
 
     def _execute(
@@ -487,6 +511,8 @@ class Supervisor:
 
             return observation
 
+        self.state_manager.record_potential_findings(state, execution_task, observation)
+
         evidence_list = (
             self.evidence_extractor.extract(
                 observation,
@@ -537,4 +563,6 @@ class Supervisor:
             and task.action == snapshot.action
             and task.target == snapshot.target
             and task.finding_id == snapshot.finding_id
+            and task.phase == snapshot.phase
+            and tuple(task.dependencies) == snapshot.dependencies
         )
