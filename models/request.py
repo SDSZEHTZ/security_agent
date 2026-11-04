@@ -1,7 +1,6 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 Action = Literal[
     "analyze_code",
@@ -26,5 +25,9 @@ class TaskRequest(BaseModel):
     action: Action
 
     target: str = Field(min_length=1)
+
+    arguments: dict[str, Any] = Field(
+        default_factory=dict
+    )
 
     phase: Literal["ANALYZE", "VERIFY", "REPORT"] = "ANALYZE"

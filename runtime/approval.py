@@ -1,5 +1,3 @@
-from copy import deepcopy
-
 from models.approval import (
     ApprovalSnapshot,
     PendingAction,
@@ -18,13 +16,7 @@ class ApprovalStore:
 
     def create(self, task, state):
 
-        copied_task = deepcopy(task)
-
-        snapshot = (
-            ApprovalSnapshot.model_validate(
-                copied_task
-            )
-        )
+        snapshot = ApprovalSnapshot.from_task(task)
 
         action_id = (
             f"A{self._next_id:03d}"

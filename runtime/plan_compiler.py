@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from models.task import Task
 
 
@@ -22,6 +24,7 @@ class PlanCompiler:
                 agent=planned.agent,
                 action=planned.action,
                 target=planned.target,
+                arguments=deepcopy(planned.arguments),
                 dependencies=[mapping[key] for key in planned.depends_on],
                 finding_id=planned.finding_id,
                 phase=proposal.phase,

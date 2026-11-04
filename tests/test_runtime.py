@@ -406,6 +406,7 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(self.state.observations, [])
 
     def test_approved_action_executes_once(self):
+        self.task.arguments = {"path": "src/app.py", "query": "eval("}
         observation = {
             "agent": "VerificationAgent",
             "task_id": "T1",
@@ -432,6 +433,7 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(executed_request.agent, "VerificationAgent")
         self.assertEqual(executed_request.action, "verify_ssrf")
         self.assertEqual(executed_request.target, "./demo_app")
+        self.assertEqual(executed_request.arguments, {"path": "src/app.py", "query": "eval("})
         self.assertEqual(self.task.status, "COMPLETED")
         self.assertEqual(self.state.observations, [result])
         self.assertEqual(

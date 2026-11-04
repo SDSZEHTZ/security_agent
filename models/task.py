@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -19,3 +20,7 @@ class Task:
     block_reason: str | None = None
 
     phase: str = "ANALYZE"
+
+    arguments: dict[str, Any] = field(
+        default_factory=dict
+    )

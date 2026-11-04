@@ -1,9 +1,8 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from models.request import Action
-
 
 Phase = Literal[
     "ANALYZE",
@@ -23,6 +22,10 @@ class PlannedTask(BaseModel):
     action: Action
 
     target: str = Field(min_length=1)
+
+    arguments: dict[str, Any] = Field(
+        default_factory=dict
+    )
 
     depends_on: list[str] = Field(default_factory=list)
 

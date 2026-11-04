@@ -53,6 +53,23 @@ class PlanValidationTests(unittest.TestCase):
         self.assertTrue(all(task.phase == "ANALYZE" and task.status == "PENDING" for task in tasks))
         self.assertEqual(len(self.state.tasks), 1)
 
+    def test_task_arguments_survive_plan_compilation_without_shared_mutation(self):
+        planned_task = planned(arguments={
+            "query": "eval(", "max_matches": 20, "options": {"max_depth": 2},
+        })
+        plan = proposal([planned_task])
+        self.validate(plan)
+        compiled = PlanCompiler().compile(plan, self.state)[0]
+        self.assertEqual(compiled.arguments, planned_task.arguments)
+        self.assertIsNot(compiled.arguments, planned_task.arguments)
+
+        planned_task.arguments["query"] = "changed"
+        planned_task.arguments["options"]["max_depth"] = 99
+        self.assertEqual(compiled.arguments["query"], "eval(")
+        self.assertEqual(compiled.arguments["options"]["max_depth"], 2)
+        compiled.arguments["options"]["max_depth"] = 3
+        self.assertEqual(planned_task.arguments["options"]["max_depth"], 99)
+
     def test_invalid_plans_are_rejected(self):
         cases = [
             (proposal(phase="VERIFY"), "INVALID_PLAN_PHASE"),

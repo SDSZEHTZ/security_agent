@@ -34,6 +34,58 @@ class SecurityRegressionTests(unittest.TestCase):
         self.assertEqual(self.task.status, "COMPLETED")
         self.agent.run.assert_called_once()
 
+    def test_approval_snapshot_freezes_arguments_and_rejects_mutation(self):
+        for mutation in ("path", "nested"):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                self.task.arguments = {"path": "src/app.py", "options": {"max_depth": 2}}
+                pending = self.supervisor.delegate(self.task, self.state)
+                action = self.supervisor.approval_store.get(pending["action_id"])
+                snapshot = action.snapshot
+                self.assertEqual(snapshot.arguments, self.task.arguments)
+
+                exposed_arguments = snapshot.arguments
+                exposed_arguments["path"] = "tampered.py"
+                exposed_arguments["options"]["max_depth"] = 99
+                self.assertEqual(snapshot.arguments, {
+                    "path": "src/app.py", "options": {"max_depth": 2},
+                })
+
+                if mutation == "path":
+                    self.task.arguments["path"] = "other.py"
+                else:
+                    self.task.arguments["options"]["max_depth"] = 3
+                self.assertEqual(snapshot.arguments, {
+                    "path": "src/app.py", "options": {"max_depth": 2},
+                })
+                result = self.supervisor.approve(pending["action_id"], self.state)
+                self.assertEqual(result, {
+                    "status": "DENIED", "reason": "APPROVED_REQUEST_MISMATCH",
+                })
+                self.assertEqual(action.status, "REJECTED")
+                self.agent.run.assert_not_called()
+
+    def test_direct_execution_preserves_arguments_and_isolates_agent_mutation(self):
+        self.task.action = "verify_sqli"
+        self.task.arguments = {"path": "src/app.py", "options": {"max_depth": 2}}
+
+        def run(request):
+            self.assertEqual(request.arguments, self.task.arguments)
+            exposed_arguments = request.arguments
+            exposed_arguments["options"]["max_depth"] = 99
+            self.assertEqual(request.arguments["options"]["max_depth"], 2)
+            return {
+                "agent": request.agent, "task_id": request.id,
+                "execution_status": "SUCCESS", "data": {},
+            }
+
+        self.agent.run.side_effect = run
+        result = self.supervisor.delegate(self.task, self.state)
+        self.assertEqual(result.execution_status, "SUCCESS")
+        self.assertEqual(self.task.arguments["options"]["max_depth"], 2)
+        self.assertEqual(self.task.status, "COMPLETED")
+        self.agent.run.assert_called_once()
+
     def test_approval_is_bound_to_original_state(self):
         pending = self.supervisor.delegate(self.task, self.state)
         other = AgentState(self.state.target)

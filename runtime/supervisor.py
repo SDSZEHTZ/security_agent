@@ -150,7 +150,7 @@ class Supervisor:
             }
 
         return self._execute(
-            execution_task=ApprovalSnapshot.model_validate(task),
+            execution_task=ApprovalSnapshot.from_task(task),
             state_task=task,
             state=state,
             agent_info=decision[
@@ -562,6 +562,7 @@ class Supervisor:
             and task.agent == snapshot.agent
             and task.action == snapshot.action
             and task.target == snapshot.target
+            and task.arguments == snapshot.arguments
             and task.finding_id == snapshot.finding_id
             and task.phase == snapshot.phase
             and tuple(task.dependencies) == snapshot.dependencies
