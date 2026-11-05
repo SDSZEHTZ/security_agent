@@ -11,6 +11,7 @@ class DemoPlanner:
             tasks.append(PlannedTask(
                 key="analysis", agent="CodeAnalysisAgent",
                 action="analyze_code", target=target,
+                arguments={"query": "execute(", "max_matches": 20},
             ))
         elif phase == "VERIFY":
             actions = {"SQL Injection": "verify_sqli", "SSRF": "verify_ssrf"}

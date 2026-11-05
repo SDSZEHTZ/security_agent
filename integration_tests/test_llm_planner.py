@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from main import build_registry
+from main import build_registry, build_tool_executor
 from planner.llm_planner import LLMPlanner
 from runtime.plan_validator import PlanValidator
 from runtime.planning_context import PlanningContextBuilder
@@ -16,7 +16,7 @@ class LivePlannerTests(unittest.TestCase):
         if not model or not os.environ.get("OPENAI_API_KEY"):
             self.skipTest("OPENAI_MODEL and OPENAI_API_KEY are required")
         state = AgentState("./demo_app")
-        registry = build_registry()
+        registry = build_registry(build_tool_executor())
         plan = LLMPlanner(model).plan_phase(
             "Analyze the authorized demo app; propose one analyze_code task.",
             state.phase, PlanningContextBuilder().build(state, registry),

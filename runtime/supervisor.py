@@ -1,5 +1,6 @@
 from pydantic import ValidationError
 from models.approval import ApprovalSnapshot
+from models.tool import ToolContext
 
 from runtime.approval import ApprovalStore
 from runtime.evidence import EvidenceExtractor
@@ -400,6 +401,15 @@ class Supervisor:
         return None
 
 
+    def _build_tool_context(self, task, state):
+        return ToolContext(
+            task_id=task.id,
+            agent=task.agent,
+            action=task.action,
+            authorized_root=state.target,
+            authorized_origin=getattr(state, "authorized_origin", None),
+        )
+
     def _execute(
         self,
         execution_task,
@@ -438,10 +448,12 @@ class Supervisor:
 
         try:
 
+            tool_context = self._build_tool_context(execution_task, state)
             result = agent_info[
                 "instance"
             ].run(
-                execution_task
+                execution_task,
+                tool_context,
             )
 
         except Exception as exc:

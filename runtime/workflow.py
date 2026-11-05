@@ -8,6 +8,7 @@ class WorkflowEngine:
 
         "VERIFY": {
             "read_file",
+            "check_http_baseline",
             "verify_sqli",
             "verify_ssrf",
             "execute_command",

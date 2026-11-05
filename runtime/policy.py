@@ -3,6 +3,7 @@ class PolicyEngine:
     DEFAULT_RULES = {
         "analyze_code": "ALLOW",
         "read_file": "ALLOW",
+        "check_http_baseline": "ALLOW",
 
         "verify_sqli": "ALLOW",
 

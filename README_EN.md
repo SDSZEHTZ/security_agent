@@ -1,11 +1,12 @@
-# Security Agent Runtime v0.6
+# Security Agent Runtime v0.7
 
 A phase-planned runtime that preserves the existing Registry, Scheduler,
-Supervisor, Evidence and HITL layers.
+Supervisor, Evidence and HITL layers, with real source tools and controlled HTTP baselines.
 
 ```text
 Goal → Planner → PlanProposal → Validator → Compiler → Runtime Tasks
-     → Scheduler → Supervisor → Agent → Observation / Evidence / Finding
+     → Scheduler → Supervisor → ToolContext → Agent → ToolExecutor → Tool
+     → Observation / Evidence / Finding
      → Plan the next runtime-selected phase
 ```
 
@@ -19,19 +20,40 @@ Python 3.10+:
 ```powershell
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe main.py
+.venv/Scripts/python.exe main.py --target .
 ```
 
-The default DemoPlanner is offline. For real LLM planning:
+The default DemoPlanner is offline and searches for `execute(` in the authorized
+source directory. Search hits do not create findings or evidence. The demo then
+runs the mock report task, without automatically scheduling verification.
+Use an existing source directory: the default `./demo_app` is retained but is not bundled.
+
+To authorize an HTTP origin separately from the source directory:
+
+```powershell
+.venv/Scripts/python.exe main.py --target . --origin http://127.0.0.1:5000
+```
+
+This only sets authorization; DemoPlanner does not automatically schedule HTTP tasks.
+The VERIFY action `check_http_baseline` defaults to `HEAD /`, permits GET/HEAD and
+origin-relative paths, disables redirects and proxies, and uses a 3-second request
+timeout and 64 KiB response read limit. A baseline is an observation, not proof of a vulnerability.
+
+For real LLM planning:
 
 ```powershell
 $env:OPENAI_API_KEY = "<your-api-key>"
-.venv/Scripts/python.exe main.py --model "<structured-output-capable-model>" --target "./demo_app"
+.venv/Scripts/python.exe main.py --model "<structured-output-capable-model>" --target . --goal "Search source using analyze_code with query execute("
 ```
 
-All agents remain mocks, including ReportAgent. They do not inspect files, send
-verification requests or execute commands. The CLI renders authoritative runtime
-findings and evidence. A real planner does not make this a real security scanner.
+CodeAnalysisAgent now calls search_code/read_source, and HTTP baseline uses a real tool.
+SQLi/SSRF verification and ReportAgent remain teaching demos. No system commands are
+executed. The CLI renders runtime findings and evidence.
+
+Task arguments: analyze_code requires a string query and accepts max_matches (agent
+default 20); read_file requires a relative path; check_http_baseline accepts path/method.
+Planner tool awareness and source feedback are deferred; specify required arguments
+in the goal when using the LLM planner.
 
 LLMPlanner uses Responses API structured parsing with PlanProposal, request
 timeout/retry/output limits and store=False. Refusals, incomplete responses and
@@ -47,6 +69,13 @@ See [official documentation](https://developers.openai.com/api/docs/guides/struc
 - Bind approvals to the original state and immutable request, including phase and
   dependencies. Repeated dispatch and approval replay are denied.
 - Pass frozen requests to agents; never give planners global state.
+- Supervisor creates frozen ToolContext after authorization, using State for the
+  source root and HTTP origin. Task arguments cannot override them. This is a
+  planner trust boundary, not process isolation for arbitrary Python agent code.
+- Check agent capabilities and tool permissions separately. Analysis may search/read;
+  read_file may only read; baseline may only use HTTP. Other pairs have no tool access.
+- Map expected tool argument/permission failures and execution ERROR to FAILED
+  observations/tasks. Tool timeouts also map to FAILED in this version.
 - Build a bounded planning context from whitelisted observation signals, findings
   and completed IDs. Raw responses, source and arbitrary nested data are excluded.
 - Runtime creates and deduplicates POTENTIAL findings from recognized analysis

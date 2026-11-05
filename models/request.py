@@ -5,8 +5,12 @@ from pydantic import BaseModel, ConfigDict, Field
 Action = Literal[
     "analyze_code",
     "read_file",
+
+    "check_http_baseline",
+
     "verify_sqli",
     "verify_ssrf",
+
     "execute_command",
     "generate_report",
 ]

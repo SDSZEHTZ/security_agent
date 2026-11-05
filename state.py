@@ -9,9 +9,11 @@ class AgentState:
     def __init__(
         self,
         target,
+        authorized_origin=None,
     ):
 
         self.target = target
+        self.authorized_origin = authorized_origin
 
         self.phase = "ANALYZE"
 

@@ -1,3 +1,21 @@
+## v0.7.0 - Runtime Tool Integration
+
+### Added
+
+- Runtime-created frozen ToolContext with separate source root and HTTP origin
+- Injected ToolRegistry/ToolExecutor and per-agent/action tool allowlists
+- Real code search and source reading through CodeAnalysisAgent
+- VERIFY check_http_baseline action, default ALLOW policy, and CLI --origin
+- Agent/runtime tool integration tests and updated legacy interface tests
+
+### Changed
+
+- Unified Agent.run(task, tool_context); removed hardcoded analysis findings
+- DemoPlanner supplies search arguments without automatically scheduling HTTP checks
+- Tool failures become FAILED observations/tasks; baseline never produces vulnerability evidence
+- Retained SQLi/SSRF and report teaching fixtures, and existing evidence rules
+- Updated CLI and bilingual documentation to distinguish tools from simulated verification
+
 ## v0.6.0 - LLM Planning and Re-planning
 
 ### Added

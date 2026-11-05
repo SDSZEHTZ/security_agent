@@ -89,7 +89,7 @@ class RunnerTests(unittest.TestCase):
         self.state = AgentState("./demo_app")
         self.registry = AgentRegistry()
         self.agent = Mock()
-        self.agent.run.side_effect = lambda task: {
+        self.agent.run.side_effect = lambda task, tool_context: {
             "agent": task.agent,
             "task_id": task.id,
             "execution_status": "SUCCESS",

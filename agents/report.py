@@ -1,7 +1,7 @@
 class ReportAgent:
     """Mock report task; the CLI renders authoritative runtime state separately."""
 
-    def run(self, task):
+    def run(self, task, tool_context=None):
         return {
             "agent": "ReportAgent",
             "task_id": task.id,

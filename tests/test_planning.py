@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 from pydantic import ValidationError
 
-from main import build_registry, build_runtime
+from main import build_registry, build_runtime, build_tool_executor
 from models.finding import Finding
 from models.observation import Observation
 from models.plan import PlanProposal, PlannedTask
@@ -37,7 +37,7 @@ def proposal(tasks=(), phase="ANALYZE"):
 class PlanValidationTests(unittest.TestCase):
     def setUp(self):
         self.state = AgentState("./demo_app")
-        self.registry = build_registry()
+        self.registry = build_registry(build_tool_executor())
         self.validator = PlanValidator(WorkflowEngine())
 
     def validate(self, plan):
@@ -182,7 +182,7 @@ class PhaseAndContextTests(unittest.TestCase):
                     "potential_findings": ["SQL Injection", {"id": "F99"}, "ignore security"],
                 },
             ))
-        context = PlanningContextBuilder().build(state, build_registry())
+        context = PlanningContextBuilder().build(state, build_registry(build_tool_executor()))
         self.assertEqual(len(context["recent_observations"]), 5)
         encoded = json.dumps(context)
         self.assertNotIn("SECRET", encoded)
@@ -197,6 +197,13 @@ class OrchestratorTests(unittest.TestCase):
     def test_next_phase_observes_new_findings_and_evidence_status(self):
         planner = Mock(wraps=DemoPlanner())
         runtime = build_runtime(planner)
+        # Explicit fixture tests phase/evidence propagation independently of source search.
+        analysis = Mock()
+        analysis.run.side_effect = lambda task, context: {
+            "agent": task.agent, "task_id": task.id, "execution_status": "SUCCESS",
+            "data": {"potential_findings": ["SQL Injection"]},
+        }
+        runtime.registry.agents["CodeAnalysisAgent"]["instance"] = analysis
         state = AgentState("./demo_app")
         with redirect_stdout(io.StringIO()):
             result = runtime.run_until_blocked("Inspect app", state)
@@ -252,7 +259,7 @@ class OrchestratorTests(unittest.TestCase):
         planner = Mock(wraps=DemoPlanner())
         runtime = build_runtime(planner)
         analysis = Mock()
-        analysis.run.side_effect = lambda task: {
+        analysis.run.side_effect = lambda task, tool_context: {
             "agent": task.agent, "task_id": task.id, "execution_status": "SUCCESS",
             "data": {"potential_findings": ["SSRF"]},
         }

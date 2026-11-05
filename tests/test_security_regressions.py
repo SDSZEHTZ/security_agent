@@ -15,7 +15,7 @@ class SecurityRegressionTests(unittest.TestCase):
         self.state = AgentState("./demo_app")
         self.state.phase = "VERIFY"
         self.agent = Mock()
-        self.agent.run.side_effect = lambda task: {
+        self.agent.run.side_effect = lambda task, tool_context: {
             "agent": task.agent, "task_id": task.id,
             "execution_status": "SUCCESS", "data": {"boolean_difference": True},
         }
@@ -69,7 +69,7 @@ class SecurityRegressionTests(unittest.TestCase):
         self.task.action = "verify_sqli"
         self.task.arguments = {"path": "src/app.py", "options": {"max_depth": 2}}
 
-        def run(request):
+        def run(request, tool_context):
             self.assertEqual(request.arguments, self.task.arguments)
             exposed_arguments = request.arguments
             exposed_arguments["options"]["max_depth"] = 99
@@ -167,7 +167,7 @@ class SecurityRegressionTests(unittest.TestCase):
 
     def test_agent_receives_frozen_request_not_runtime_task(self):
         self.task.action = "verify_sqli"
-        def mutate(request):
+        def mutate(request, tool_context):
             request.target = "./other"
         self.agent.run.side_effect = mutate
         result = self.supervisor.delegate(self.task, self.state)
@@ -181,7 +181,7 @@ class SecurityRegressionTests(unittest.TestCase):
         self.task.agent = "CodeAnalysisAgent"
         self.task.action = "analyze_code"
         self.runtime.registry.agents["CodeAnalysisAgent"]["instance"] = self.agent
-        self.agent.run.side_effect = lambda task: {
+        self.agent.run.side_effect = lambda task, tool_context: {
             "agent": task.agent, "task_id": task.id, "execution_status": "SUCCESS",
             "data": {"potential_findings": [
                 "SQL Injection", "SQL Injection", {"id": "F9", "status": "CONFIRMED"}, "SSRF",

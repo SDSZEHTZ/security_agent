@@ -1,11 +1,13 @@
 import io
 import unittest
+import tempfile
+from pathlib import Path
 from contextlib import redirect_stdout
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from agents.code_analysis import CodeAnalysisAgent
 from agents.verification import VerificationAgent
-from main import main
+from main import build_tool_executor, cli, main
 from models.finding import Finding
 from models.observation import Observation
 from models.task import Task
@@ -54,7 +56,7 @@ class StateTests(unittest.TestCase):
 class RegistryTests(unittest.TestCase):
     def test_registration_and_lookup(self):
         registry = AgentRegistry()
-        agent = CodeAnalysisAgent()
+        agent = CodeAnalysisAgent(build_tool_executor())
         registry.register("CodeAnalysisAgent", agent, ["analyze_code"])
 
         info = registry.get("CodeAnalysisAgent")
@@ -67,7 +69,7 @@ class RegistryTests(unittest.TestCase):
     def test_registration_copies_capabilities(self):
         registry = AgentRegistry()
         capabilities = ["analyze_code"]
-        registry.register("CodeAnalysisAgent", CodeAnalysisAgent(), capabilities)
+        registry.register("CodeAnalysisAgent", CodeAnalysisAgent(build_tool_executor()), capabilities)
         capabilities.append("verify_sqli")
         self.assertEqual(
             registry.get("CodeAnalysisAgent")["capabilities"], ["analyze_code"]
@@ -90,7 +92,7 @@ class SupervisorTests(unittest.TestCase):
             "data": {},
         }
 
-        def run(task):
+        def run(task, tool_context):
             self.assertIsNot(task, self.task)
             self.assertEqual(task.id, self.task.id)
             self.assertEqual(self.task.status, "RUNNING")
@@ -148,9 +150,15 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.task.status, "FAILED")
         self.assertEqual(self.state.observations, [])
 
-    def test_both_mock_agents_run_through_runtime(self):
-        self.registry.register("CodeAnalysisAgent", CodeAnalysisAgent(), ["analyze_code"])
-        self.registry.register("VerificationAgent", VerificationAgent(), ["verify_sqli"])
+    def test_source_and_demo_verification_agents_run_through_runtime(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state.target = directory.name
+        self.task.target = directory.name
+        self.task.arguments = {"query": "execute("}
+        Path(directory.name, "app.py").write_text("cursor.execute(query)\n", encoding="utf-8")
+        self.registry.register("CodeAnalysisAgent", CodeAnalysisAgent(build_tool_executor()), ["analyze_code"])
+        self.registry.register("VerificationAgent", VerificationAgent(build_tool_executor()), ["verify_sqli"])
         verification = Task("T2", "VerificationAgent", "verify_sqli", self.state.target, phase="VERIFY")
         self.state.add_task(verification)
 
@@ -163,7 +171,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(analysis_result.task_id, "T1")
         self.assertEqual(analysis_result.execution_status, "SUCCESS")
         self.assertEqual(
-            analysis_result.data["potential_findings"], ["SQL Injection"]
+            analysis_result.data["matches"][0]["path"], "app.py"
         )
         self.assertEqual(verification_result.agent, "VerificationAgent")
         self.assertEqual(verification_result.task_id, "T2")
@@ -173,8 +181,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(
             self.state.observations, [analysis_result, verification_result]
         )
-        self.assertEqual(len(self.state.findings), 1)
-        self.assertEqual(self.state.findings[0].status, "POTENTIAL")
+        self.assertEqual(self.state.findings, [])
         self.assertEqual(self.state.evidence, [])
 
 
@@ -934,25 +941,31 @@ class StateManagerTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
-    def test_demo_prints_evidence_pipeline(self):
+    def test_demo_prints_real_search_without_fabricating_findings(self):
         output = io.StringIO()
-        with redirect_stdout(output):
-            main()
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(output):
+            Path(directory, "app.py").write_text("cursor.execute(query)\n", encoding="utf-8")
+            result = main(target=directory)
 
         text = output.getvalue()
-        self.assertIn(
-            "[VerificationAgent] verifying: verify_sqli -> ./demo_app",
-            text,
-        )
+        self.assertEqual(result, {"status": "COMPLETED", "failed_task_ids": []})
+        self.assertIn('"snippet": "cursor.execute(query)"', text)
+        self.assertNotIn("[VerificationAgent] verifying", text)
         self.assertIn("=== Result ===", text)
         self.assertIn("=== Tasks ===", text)
-        for phase in ("ANALYZE", "VERIFY", "REPORT"):
+        for phase in ("ANALYZE", "REPORT"):
             self.assertIn(f'"phase": "{phase}"', text)
         self.assertIn("=== Observations ===", text)
         self.assertIn("=== Evidence ===", text)
-        self.assertIn('"evidence_type": "SQL_ERROR_SIGNAL"', text)
+        self.assertNotIn('"evidence_type": "SQL_ERROR_SIGNAL"', text)
         self.assertIn("=== Findings ===", text)
-        self.assertIn('"status": "UNCONFIRMED"', text)
+        self.assertNotIn('"status": "UNCONFIRMED"', text)
+
+    def test_cli_forwards_explicit_origin(self):
+        with patch("sys.argv", ["main.py", "--target", ".", "--origin", "http://127.0.0.1:5000"]), \
+                patch("main.main", return_value={"status": "COMPLETED", "failed_task_ids": []}) as run:
+            self.assertEqual(cli(), 0)
+        self.assertEqual(run.call_args.args[1:], (".", None, "http://127.0.0.1:5000"))
 
 
 if __name__ == "__main__":
