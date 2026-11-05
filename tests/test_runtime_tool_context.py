@@ -85,7 +85,7 @@ class RuntimeToolContextTests(unittest.TestCase):
             response.headers = {"Content-Type": "text/plain"}
             result = self.runtime.supervisor.delegate(task, self.state)
         self.assertEqual(task.status, "COMPLETED")
-        self.assertEqual(result.data["status_code"], 200)
+        self.assertEqual(result.data["http_baseline"]["status_code"], 200)
         self.assertEqual(self.state.observations, [result])
         self.assertEqual(self.state.findings, [])
         self.assertEqual(self.state.evidence, [])

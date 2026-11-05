@@ -46,8 +46,11 @@ class VerificationAgent:
                 "tool_name": tool_name, "reason": "TOOL_EXECUTION_FAILED",
                 "error": result.error,
             })
+        # Keep HTTP baseline data separate from verified vulnerability evidence.
+        # A successful baseline describes reachability/response metadata only.
         return self._observation(task, "SUCCESS", {
-            "tool_name": tool_name, **result.data,
+            "tool_name": tool_name,
+            "http_baseline": result.data,
         })
 
     @staticmethod

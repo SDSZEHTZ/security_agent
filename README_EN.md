@@ -97,7 +97,8 @@ or persistent storage.
 .venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
-Unit tests use injected clients and planners without network calls. Live API tests
+Tests use injected clients and planners plus a temporary HTTP server on 127.0.0.1
+for real loopback requests; they do not access the public internet. Live API tests
 are separately opt-in and may incur cost:
 
 ```powershell
@@ -107,3 +108,5 @@ $env:OPENAI_MODEL = "<structured-output-capable-model>"
 ```
 
 See [Chinese documentation](README.md) and [audit notes](AUDIT_v0.6.md).
+
+HTTP baseline observations store response metadata under `Observation.data["http_baseline"]`; this is not vulnerability evidence.

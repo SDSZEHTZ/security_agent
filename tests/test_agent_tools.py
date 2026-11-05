@@ -89,7 +89,7 @@ class AgentToolTests(unittest.TestCase):
                     request = build_opener.return_value.open.call_args.args[0]
                     self.assertEqual(request.full_url, "http://127.0.0.1:5000" + path)
                     self.assertEqual(request.get_method(), method)
-                    self.assertEqual(result["data"]["status_code"], 200)
+                    self.assertEqual(result["data"]["http_baseline"]["status_code"], 200)
                     self.assertNotIn("potential_findings", result["data"])
 
     def test_http_missing_origin_and_invalid_arguments_never_open_connection(self):

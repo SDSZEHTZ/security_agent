@@ -10,6 +10,9 @@
 
 ### Changed
 
+- Keep real HTTP baseline response metadata under `Observation.data["http_baseline"]`
+- Cover loopback HTTP GET/HEAD, no-follow redirects, body limits and invalid-path non-execution with real sockets
+
 - Unified Agent.run(task, tool_context); removed hardcoded analysis findings
 - DemoPlanner supplies search arguments without automatically scheduling HTTP checks
 - Tool failures become FAILED observations/tasks; baseline never produces vulnerability evidence

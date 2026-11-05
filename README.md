@@ -36,6 +36,7 @@ python -m venv .venv
 ```
 
 `--origin` 只设置授权范围，DemoPlanner 暂不自动创建 HTTP 任务。
+成功的 baseline 结果保存在 `Observation.data["http_baseline"]`，只包含响应元信息；不会生成 Finding/Evidence。
 `check_http_baseline` 在 VERIFY 阶段由 VerificationAgent 执行，默认 `HEAD /`，
 允许 `GET` / `HEAD` 和 Origin 相对路径；禁止更换 Host、跟随重定向或使用代理，
 采用 3 秒请求超时和 64 KiB 响应读取上限。它只记录 Observation，不确认漏洞。
@@ -113,7 +114,8 @@ result = runtime.run_until_blocked(goal, state)
 .venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
-单元测试使用 Mock/DemoPlanner，不联网。覆盖原有安全控制、动态上下文、
+测试使用 Mock/DemoPlanner，并通过 `127.0.0.1` 临时 HTTP 服务验证真实请求；不访问公网。
+覆盖原有安全控制、动态上下文、
 编译、非法计划、空阶段、超时传播、审批暂停恢复、防重放及 Finding 关联。
 
 真实 API 测试与单元测试分目录，默认跳过；手动开启会产生 API 费用：
