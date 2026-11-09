@@ -11,8 +11,9 @@ class VerificationAgent:
         if task.action == "check_http_baseline":
             return self._check_http(task, tool_context)
 
-        # Retain the teaching fixtures for the existing evidence pipeline.
-        print(f"[VerificationAgent] verifying: {task.action} -> {task.target}")
+        # These are deterministic teaching fixtures, NOT vulnerability checks.
+        # No network/tool request is performed for either action.
+        print(f"[VerificationAgent] DEMO fixture: {task.action} -> {task.target}")
 
         if task.action == "verify_sqli":
             data = {
@@ -27,7 +28,12 @@ class VerificationAgent:
         else:
             return self._observation(task, "FAILED", {"reason": "UNSUPPORTED_ACTION"})
 
-        return self._observation(task, "SUCCESS", data)
+        # This explicit marker is a defense against accidental evidence promotion,
+        # not authentication: untrusted third-party Agents require a separate trust boundary.
+        return self._observation(task, "SUCCESS", {
+            **data,
+            "verification_mode": "DEMO_FIXTURE",
+        })
 
     def _check_http(self, task, tool_context):
         arguments = task.arguments

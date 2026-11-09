@@ -26,7 +26,8 @@ python -m venv .venv
 The default DemoPlanner is offline and searches for `execute(` in the authorized
 source directory. Search hits do not create findings or evidence. The demo then
 runs the mock report task, without automatically scheduling verification.
-Use an existing source directory: the default `./demo_app` is retained but is not bundled.
+Use an existing source directory. The bundled, harmless `./demo_app` fixture is the
+default target, so `python main.py` also works without arguments.
 
 To authorize an HTTP origin separately from the source directory:
 
@@ -48,7 +49,12 @@ $env:OPENAI_API_KEY = "<your-api-key>"
 
 CodeAnalysisAgent now calls search_code/read_source, and HTTP baseline uses a real tool.
 SQLi/SSRF verification and ReportAgent remain teaching demos. No system commands are
-executed. The CLI renders runtime findings and evidence.
+executed. Built-in simulated verification results carry `verification_mode=DEMO_FIXTURE`.
+EvidenceExtractor ignores them; planner context retains only the simulation marker,
+without fabricated response codes or vulnerability signals. Completing a demo task
+does not establish a vulnerability. The marker prevents accidental misuse, but is
+not proof of trustworthy third-party agent output. The CLI renders runtime findings
+and evidence.
 
 Task arguments: analyze_code requires a string query and accepts max_matches (agent
 default 20); read_file requires a relative path; check_http_baseline accepts path/method.

@@ -1,0 +1,6 @@
+test_live_analyze_proposal_passes_runtime_validation (test_llm_planner.LivePlannerTests) ... skipped 'Live API test is opt-in'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK (skipped=1)

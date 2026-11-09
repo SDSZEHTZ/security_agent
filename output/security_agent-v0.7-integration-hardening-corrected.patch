@@ -1,0 +1,404 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,12 @@
++## v0.7 integration hardening (unreleased; do not tag until acceptance)
++
++- Built-in SQLi/SSRF teaching fixtures are marked `DEMO_FIXTURE`; evidence extraction ignores them.
++- Planner context retains the fixture marker while dropping all fabricated signals.
++- Added regression tests demonstrating that fake responses do not produce evidence or confirm findings.
++- SDK contract tests skip missing `openai` or `httpx`, without hiding broken transitive dependencies.
++- Added a harmless `demo_app` directory for the default CLI source scanning workflow.
++- Did not implement real SQLi/SSRF verification or trust unverified third-party Agent output.
++
+ ## v0.7.0 - Runtime Tool Integration
+ 
+ ### Added
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -27,7 +27,7 @@
+ 默认使用离线 DemoPlanner，无需 API Key，不调用模型。
+ 演示在授权目录搜索 `execute(`，记录真实命中，再执行 Mock 报告任务。
+ 关键词命中不自动生成 Finding 或 Evidence，因此默认演示不会规划 SQLi/SSRF 验证。
+-`--target` 必须指向存在的源码目录；默认值 `./demo_app` 保留，但仓库未附带该目录。
++`--target` 必须指向存在的源码目录；本仓库附带 `./demo_app` 最小无害源码示例，可直接运行默认命令。
+ 
+ 授权 HTTP Origin（与源码目录分开）：
+ 
+@@ -55,7 +55,7 @@
+ 接口参考：[OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)。
+ 
+ CodeAnalysisAgent 已实际调用 `search_code` / `read_source`，HTTP baseline 也使用真实工具。
+-`verify_sqli`、`verify_ssrf` 仍是教学模拟，不代表真实漏洞验证；不执行系统命令。
++`verify_sqli`、`verify_ssrf` 仍是教学模拟，不代表真实漏洞验证；不执行系统命令。内置模拟结果带 `verification_mode=DEMO_FIXTURE`，EvidenceExtractor 明确拒绝从这些结果抽取 Evidence；传给 Planner 的上下文仅保留模拟标记，不包含虚构的响应码或漏洞信号。任务 COMPLETED 不代表漏洞得到确认。旧的单元测试中使用 Mock Observation 测试证据规则，不表示真实工具已经具备相关验证能力。此标记只能防止意外混淆，不能防止不可信 Agent 伪造验证结果；正式真实漏洞验证需要可信工具来源与额外的证据归属校验。
+ ReportAgent 是演示任务；控制台展示的 Finding/Evidence 来自 Runtime，并非 LLM 安全结论。
+ 
+ 任务参数：`analyze_code` 需要字符串 `query`，可选 `max_matches`（Agent 默认 20）；
+diff --git a/README_EN.md b/README_EN.md
+--- a/README_EN.md
++++ b/README_EN.md
+@@ -26,7 +26,8 @@
+ The default DemoPlanner is offline and searches for `execute(` in the authorized
+ source directory. Search hits do not create findings or evidence. The demo then
+ runs the mock report task, without automatically scheduling verification.
+-Use an existing source directory: the default `./demo_app` is retained but is not bundled.
++Use an existing source directory. The bundled, harmless `./demo_app` fixture is the
++default target, so `python main.py` also works without arguments.
+ 
+ To authorize an HTTP origin separately from the source directory:
+ 
+@@ -48,7 +49,12 @@
+ 
+ CodeAnalysisAgent now calls search_code/read_source, and HTTP baseline uses a real tool.
+ SQLi/SSRF verification and ReportAgent remain teaching demos. No system commands are
+-executed. The CLI renders runtime findings and evidence.
++executed. Built-in simulated verification results carry `verification_mode=DEMO_FIXTURE`.
++EvidenceExtractor ignores them; planner context retains only the simulation marker,
++without fabricated response codes or vulnerability signals. Completing a demo task
++does not establish a vulnerability. The marker prevents accidental misuse, but is
++not proof of trustworthy third-party agent output. The CLI renders runtime findings
++and evidence.
+ 
+ Task arguments: analyze_code requires a string query and accepts max_matches (agent
+ default 20); read_file requires a relative path; check_http_baseline accepts path/method.
+diff --git a/agents/verification.py b/agents/verification.py
+--- a/agents/verification.py
++++ b/agents/verification.py
+@@ -11,8 +11,9 @@
+         if task.action == "check_http_baseline":
+             return self._check_http(task, tool_context)
+ 
+-        # Retain the teaching fixtures for the existing evidence pipeline.
+-        print(f"[VerificationAgent] verifying: {task.action} -> {task.target}")
++        # These are deterministic teaching fixtures, NOT vulnerability checks.
++        # No network/tool request is performed for either action.
++        print(f"[VerificationAgent] DEMO fixture: {task.action} -> {task.target}")
+ 
+         if task.action == "verify_sqli":
+             data = {
+@@ -27,7 +28,12 @@
+         else:
+             return self._observation(task, "FAILED", {"reason": "UNSUPPORTED_ACTION"})
+ 
+-        return self._observation(task, "SUCCESS", data)
++        # This explicit marker is a defense against accidental evidence promotion,
++        # not authentication: untrusted third-party Agents require a separate trust boundary.
++        return self._observation(task, "SUCCESS", {
++            **data,
++            "verification_mode": "DEMO_FIXTURE",
++        })
+ 
+     def _check_http(self, task, tool_context):
+         arguments = task.arguments
+diff --git a/demo_app/README.md b/demo_app/README.md
+new file mode 100644
+--- /dev/null
++++ b/demo_app/README.md
+@@ -0,0 +1,8 @@
++# Offline source-scanning fixture
++
++This is a **non-running**, harmless source fixture for the default CLI target
++`./demo_app`. `cursor.execute(` is present so DemoPlanner can find a genuine
++source match. It is a parameterized query, **not** evidence of SQL injection.
++
++No web server is started here. For `check_http_baseline`, supply a separately
++authorized HTTP origin with `--origin` and an appropriate VERIFY-phase task.
+diff --git a/demo_app/app.py b/demo_app/app.py
+new file mode 100644
+--- /dev/null
++++ b/demo_app/app.py
+@@ -0,0 +1,7 @@
++"""Harmless example for read_source/search_code integration demonstrations."""
++
++
++def list_users(cursor):
++    # Static parameterized SQL. Finding a keyword does not imply SQL injection.
++    cursor.execute("SELECT id, name FROM users WHERE active = ?", (1,))
++    return cursor.fetchall()
+diff --git a/docs/v0.7_integration_hardening_notes.md b/docs/v0.7_integration_hardening_notes.md
+new file mode 100644
+--- /dev/null
++++ b/docs/v0.7_integration_hardening_notes.md
+@@ -0,0 +1,59 @@
++# v0.7 第四部分：集成加固补丁与验收
++
++## 本次已变更的文件
++
++| 文件 | 变化 | 原因 |
++|---|---|---|
++| `agents/verification.py` | SQLi/SSRF 内置模拟结果增加 `verification_mode=DEMO_FIXTURE` | 显式声明没有执行真实漏洞验证 |
++| `runtime/evidence.py` | 拒绝从 `DEMO_FIXTURE` Observation 抽取 Evidence | 避免演示数据影响真实 Finding 结论 |
++| `runtime/planning_context.py` | 模拟 Observation 仅向 Planner 传递模拟标记 | 防止虚构的响应码和漏洞信号进入后续规划 |
++| `tests/test_demo_evidence_isolation.py` | 新增 5 项回归测试 | 覆盖模拟证据隔离、Planner 信号隔离及无工具调用 |
++| `tests/test_planning.py` | 旧跨阶段测试断言模拟证据为空；缺少 openai/httpx 时 skip，并测试缺依赖与依赖损坏两种情形 | 区分环境缺依赖和功能失败，不掩盖传递依赖损坏 |
++| `demo_app/app.py` | 新增参数化 SQL 样例 | 默认 CLI 具有可扫描的源码示例；关键词命中不等于漏洞 |
++| `demo_app/README.md` | 解释样例用途 | 防止将样例视作已发现 SQLi |
++| `README.md` / `README_EN.md` | 更新 CLI 说明与模拟证据边界 | 中英文文档与真实实现一致 |
++| `CHANGELOG.md` | 记录未发布的集成加固内容 | 保持版本轨迹 |
++
++## 数据流（已实现）
++
++`VerificationAgent(verify_sqli/verify_ssrf)` 产生带 `verification_mode=DEMO_FIXTURE` 的 `Observation.data`。Supervisor 将 Observation 写入 State，EvidenceExtractor 识别标记后直接返回空列表。若 Task 存在对应 Finding，FindingEvaluator 仅根据已存在 Evidence 评价，不会由演示响应制造新证据。Task `COMPLETED` 仅说明此次模拟执行返回正常，不说明漏洞已确认。
++
++PlanningContextBuilder 保留模拟 Observation 的任务 ID、执行状态及 `verification_mode=DEMO_FIXTURE`，但不将其响应码、布尔信号、潜在漏洞或原始响应传给 Planner。State 中的原始 Observation 保留供审计；非模拟 Observation 继续使用原有白名单过滤。
++
++**限制：** 此方式防止内置模拟结果被误用，不是通用的可信来源证明。外部恶意 Agent 可能伪造没有标记的 Observation；真正的强信任边界应通过 Runtime 维护工具调用回执或带来源的可信证据模型来建立。当前项目未实现真实 SQLi/SSRF 验证，不应声称已经解决恶意 Agent 伪造证据问题。
++
++## 验收命令
++
++在仓库根目录：
++
++```bash
++python -m pip install -r requirements.txt
++python -m unittest discover -s tests -v
++python -m unittest discover -s integration_tests -v
++python main.py --target ./demo_app
++```
++
++使用 PowerShell 时亦可使用上述命令。实时 API 集成测试默认跳过，需要单独设置 `RUN_LLM_INTEGRATION=1`、`OPENAI_MODEL`、`OPENAI_API_KEY` 后再运行；切勿在公共 CI 中配置外部攻击目标或泄漏密钥。
++
++## 原补丁执行记录（原作者环境，非修订版验收结果）
++
++- 单元测试：185 个，184 通过，1 跳过（本地缺少 `openai` SDK）。
++- API 实时集成测试：1 个，按设计跳过（未启用实时凭据）。
++- 默认 CLI：`python main.py --target ./demo_app` 成功完成，找到真实 `execute(` 代码命中，不产生 Finding 或 Evidence。
++- 尝试安装 OpenAI SDK 因当前执行环境无法访问包索引而未完成。因此**不能声称 SDK 合同测试已经通过**。
++
++修订版新增 3 项测试，单元测试总数为 188。应重新执行上述验收命令，以当前环境的结果为准；只有安装全部依赖后 SDK 合同测试实际运行通过，才能计入完整验收。
++
++## Git 操作（本地确认所有必需测试通过后）
++
++```bash
++git add agents/verification.py runtime/evidence.py runtime/planning_context.py tests/test_demo_evidence_isolation.py tests/test_planning.py demo_app README.md README_EN.md CHANGELOG.md docs/v0.7_integration_hardening_notes.md
++git commit -m "fix(runtime): isolate demo verification evidence"
++git status
++# 安装全部依赖、确认所有必需测试成功后，检查拟发布标签未占用：
++git tag --list v0.7.2
++# 仅在上一条无输出且决定发布 v0.7.2 时执行：
++git tag v0.7.2
++```
++
++当前仓库已有 v0.7.0 和 v0.7.1，不能复用或覆盖它们。本补丁不会自动提交 Git 或创建 Tag。
+diff --git a/runtime/evidence.py b/runtime/evidence.py
+--- a/runtime/evidence.py
++++ b/runtime/evidence.py
+@@ -15,6 +15,12 @@
+     ):
+ 
+         if observation.execution_status != "SUCCESS":
++            return []
++
++        # Built-in VerificationAgent fixtures are illustrative only. Their
++        # simulated SQL error / callback fields must not become Evidence.
++        # This marker is not an attestation of real-world tool provenance.
++        if observation.data.get("verification_mode") == "DEMO_FIXTURE":
+             return []
+ 
+         if task.finding_id is None:
+diff --git a/runtime/planning_context.py b/runtime/planning_context.py
+--- a/runtime/planning_context.py
++++ b/runtime/planning_context.py
+@@ -39,6 +39,14 @@
+     def _observations(self, state):
+         result = []
+         for observation in state.observations[-self.MAX_OBSERVATIONS:]:
++            if observation.data.get("verification_mode") == "DEMO_FIXTURE":
++                # Keep the simulation label, but never expose fabricated signals.
++                result.append({
++                    "task_id": observation.task_id,
++                    "execution_status": observation.execution_status,
++                    "data": {"verification_mode": "DEMO_FIXTURE"},
++                })
++                continue
+             # Whitelist evidence signals. Raw source, responses, secrets, arbitrary
+             # keys and nested objects are never stringified into planner context.
+             data = {}
+diff --git a/tests/test_demo_evidence_isolation.py b/tests/test_demo_evidence_isolation.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_demo_evidence_isolation.py
+@@ -0,0 +1,106 @@
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import Mock
++
++from agents.verification import VerificationAgent
++from main import build_registry, build_tool_executor
++from models.finding import Finding
++from models.observation import Observation
++from models.task import Task
++from runtime.evidence import EvidenceExtractor
++from runtime.planning_context import PlanningContextBuilder
++from runtime.supervisor import Supervisor
++from state import AgentState
++
++
++class DemoEvidenceIsolationTests(unittest.TestCase):
++    def setUp(self):
++        directory = tempfile.TemporaryDirectory()
++        self.addCleanup(directory.cleanup)
++        self.root = Path(directory.name)
++
++    def _run_demo(self, action, finding_type):
++        executor = Mock()
++        registry = build_registry(build_tool_executor())
++        registry.agents["VerificationAgent"]["instance"] = VerificationAgent(executor)
++        supervisor = Supervisor(registry)
++        state = AgentState(str(self.root))
++        state.phase = "VERIFY"
++        finding = Finding(id="F1", finding_type=finding_type, target=state.target)
++        task = Task("T1", "VerificationAgent", action, state.target, finding_id="F1", phase="VERIFY")
++        state.findings.append(finding)
++        state.tasks.append(task)
++        if action == "verify_ssrf":
++            pending = supervisor.delegate(task, state)
++            self.assertEqual(pending["status"], "WAITING_CONFIRMATION")
++            result = supervisor.approve(pending["action_id"], state)
++        else:
++            result = supervisor.delegate(task, state)
++        self.assertEqual(result.execution_status, "SUCCESS")
++        self.assertEqual(result.data["verification_mode"], "DEMO_FIXTURE")
++        self.assertEqual(task.status, "COMPLETED")
++        self.assertEqual(state.evidence, [])
++        self.assertNotEqual(finding.status, "CONFIRMED")
++        self.assertEqual(finding.status, "UNCONFIRMED")
++        executor.execute.assert_not_called()
++        context = PlanningContextBuilder().build(state, registry)
++        self.assertEqual(context["recent_observations"], [{
++            "task_id": task.id,
++            "execution_status": "SUCCESS",
++            "data": {"verification_mode": "DEMO_FIXTURE"},
++        }])
++        return result
++
++    def test_demo_sqli_does_not_promote_finding(self):
++        self._run_demo("verify_sqli", "SQL Injection")
++
++    def test_demo_ssrf_does_not_promote_finding(self):
++        self._run_demo("verify_ssrf", "SSRF")
++
++    def test_extractor_ignores_fixture_even_if_strong_signal_present(self):
++        observation = Observation(
++            agent="VerificationAgent", task_id="T1", execution_status="SUCCESS",
++            data={"verification_mode": "DEMO_FIXTURE",
++                  "boolean_difference": True, "callback_received": True,
++                  "response": "SQL syntax"},
++        )
++        extractor = EvidenceExtractor()
++        for action in ("verify_sqli", "verify_ssrf"):
++            with self.subTest(action=action):
++                task = Task("T1", "VerificationAgent", action, str(self.root), finding_id="F1")
++                self.assertEqual(extractor.extract(observation, task), [])
++        self.assertEqual(extractor._next_id, 1)
++
++    def test_http_baseline_remains_not_evidence(self):
++        observation = Observation(
++            agent="VerificationAgent", task_id="T1", execution_status="SUCCESS",
++            data={"http_baseline": {"status_code": 500}},
++        )
++        task = Task("T1", "VerificationAgent", "check_http_baseline", str(self.root), finding_id="F1")
++        self.assertEqual(EvidenceExtractor().extract(observation, task), [])
++
++    def test_planner_omits_all_fixture_signals_and_preserves_real_observations(self):
++        fixture_data = {
++            "verification_mode": "DEMO_FIXTURE", "status_code": 500,
++            "boolean_difference": True, "callback_received": True,
++            "request_completed": True, "potential_findings": ["SQL Injection"],
++            "response": "SQL syntax",
++        }
++        state = AgentState(str(self.root))
++        state.observations = [
++            Observation(agent="VerificationAgent", task_id="T1",
++                        execution_status="SUCCESS", data=fixture_data.copy()),
++            Observation(agent="VerificationAgent", task_id="T2",
++                        execution_status="SUCCESS", data={"status_code": 200}),
++        ]
++        registry = build_registry(build_tool_executor())
++        context = PlanningContextBuilder().build(state, registry)
++        self.assertEqual(context["recent_observations"][0]["data"],
++                         {"verification_mode": "DEMO_FIXTURE"})
++        self.assertEqual(context["recent_observations"][1]["data"], {"status_code": 200})
++        self.assertEqual(state.observations[0].data, fixture_data)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_planning.py b/tests/test_planning.py
+--- a/tests/test_planning.py
++++ b/tests/test_planning.py
+@@ -1,9 +1,10 @@
++import builtins
+ import io
+ import json
+ import unittest
+ from contextlib import redirect_stdout
+ from types import SimpleNamespace
+-from unittest.mock import Mock
++from unittest.mock import Mock, patch
+ 
+ from pydantic import ValidationError
+ 
+@@ -214,7 +215,9 @@
+         self.assertEqual(calls[1].kwargs["context"]["findings"][0]["status"], "POTENTIAL")
+         self.assertEqual(calls[2].kwargs["context"]["findings"][0]["status"], "UNCONFIRMED")
+         self.assertEqual(state.phase, "END")
+-        self.assertEqual(len(state.evidence), 1)
++        # Built-in SQLi/SSRF fixtures never become security evidence.
++        self.assertEqual(state.evidence, [])
++        self.assertEqual(state.findings[0].status, "UNCONFIRMED")
+         runtime.run_until_blocked("Inspect app", state)
+         self.assertEqual(planner.plan_phase.call_count, 3)
+ 
+@@ -299,8 +302,13 @@
+ 
+ class LLMPlannerTests(unittest.TestCase):
+     def test_real_sdk_parses_structured_response_using_offline_http_transport(self):
+-        import httpx
+-        from openai import OpenAI
++        try:
++            import httpx
++            from openai import OpenAI
++        except ModuleNotFoundError as exc:
++            if exc.name not in {"httpx", "openai"}:
++                raise
++            self.skipTest(f"{exc.name} not installed; install requirements.txt to run SDK contract test")
+ 
+         expected = proposal([planned()])
+         captured = []
+@@ -360,5 +368,34 @@
+                 self.assertNotIn("sensitive", str(caught.exception))
+ 
+ 
++class SDKDependencyHandlingTests(unittest.TestCase):
++    def test_missing_sdk_or_httpx_skips_contract_test(self):
++        original_import = builtins.__import__
++        for missing in ({"httpx"}, {"openai"}, {"httpx", "openai"}):
++            with self.subTest(missing=missing):
++                def import_without_dependency(name, *args, **kwargs):
++                    if name in missing:
++                        raise ModuleNotFoundError(f"No module named '{name}'", name=name)
++                    # Only dependency availability is relevant to this test.
++                    if name == "httpx":
++                        return SimpleNamespace()
++                    return original_import(name, *args, **kwargs)
++
++                contract = LLMPlannerTests(
++                    "test_real_sdk_parses_structured_response_using_offline_http_transport")
++                with patch("builtins.__import__", side_effect=import_without_dependency):
++                    with self.assertRaisesRegex(unittest.SkipTest, "install requirements.txt"):
++                        contract.test_real_sdk_parses_structured_response_using_offline_http_transport()
++
++    def test_broken_transitive_dependency_is_not_silently_skipped(self):
++        contract = LLMPlannerTests(
++            "test_real_sdk_parses_structured_response_using_offline_http_transport")
++        error = ModuleNotFoundError("No module named 'httpcore'", name="httpcore")
++        with patch("builtins.__import__", side_effect=error):
++            with self.assertRaises(ModuleNotFoundError) as caught:
++                contract.test_real_sdk_parses_structured_response_using_offline_http_transport()
++        self.assertIs(caught.exception, error)
++
++
+ if __name__ == "__main__":
+     unittest.main()

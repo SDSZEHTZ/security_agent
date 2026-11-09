@@ -17,6 +17,12 @@ class EvidenceExtractor:
         if observation.execution_status != "SUCCESS":
             return []
 
+        # Built-in VerificationAgent fixtures are illustrative only. Their
+        # simulated SQL error / callback fields must not become Evidence.
+        # This marker is not an attestation of real-world tool provenance.
+        if observation.data.get("verification_mode") == "DEMO_FIXTURE":
+            return []
+
         if task.finding_id is None:
             return []
 

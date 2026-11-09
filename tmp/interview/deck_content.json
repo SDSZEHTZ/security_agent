@@ -1,0 +1,82 @@
+[
+  {
+    "title": "项目介绍",
+    "notes": "建议 30 秒。这个项目围绕一个问题展开：当模型能提出安全测试计划时，如何确保每一步执行仍然符合授权、阶段和人工审批规则？我通过七轮迭代实现了 Python Runtime，从注册和派发逐步加入安全门控、证据管理、依赖调度、分阶段规划与真实工具。当前是可运行的工程原型。",
+    "source": "README.md；CHANGELOG.md；git log"
+  },
+  {
+    "title": "项目问题与目标",
+    "notes": "建议 40 秒。传统脚本能执行工具，但当规划来自模型时，任务内容不能直接当作权限。项目把模型建议交给运行时审查，并在真正执行时再次检查。另一个目标是让结果可解释：任务执行成功，不等于漏洞被确认。项目没有业务收益或线上规模数据，因此重点展示可验证的工程行为。",
+    "source": "runtime/plan_validator.py；runtime/supervisor.py；runtime/evidence.py"
+  },
+  {
+    "title": "七轮迭代",
+    "notes": "建议 45 秒。按版本讲设计演进，而不是逐个罗列文件。v0.1 和 v0.6 的版本归属由提交内容及现有文档对应；不是每一轮都有同名 Git tag。当前快照还包含 v0.7 的 baseline 元数据隔离与回环测试修正。",
+    "source": "提交 757b614、92db104、39e82fd、8f27aaa、9fbba3c、9da3a73、a1406b1 至 edd818c；CHANGELOG.md"
+  },
+  {
+    "title": "整体架构",
+    "notes": "建议 50 秒。一次调用从 build_runtime 装配开始。AgentRuntime 选择当前阶段，Planner 输出提案，Validator 校验语义，Compiler 分配 Runtime ID。Scheduler 选出就绪任务，Supervisor 检查并构造冻结请求与 ToolContext，Agent 再通过 ToolExecutor 调用真实工具。结果返回后，由 Runtime 校验身份、保存观察和更新状态。Agent 不接收全局 State。",
+    "source": "main.py:build_runtime；runtime/orchestrator.py:run_until_blocked；runtime/supervisor.py:_execute"
+  },
+  {
+    "title": "执行安全门控",
+    "notes": "建议 50 秒。Capability 是 Agent 声明能完成的动作，Policy 是当前动作是否允许，Scope 是目标是否在授权范围，三者各自回答不同问题。请求的类型正确不意味着有权限。未知策略默认拒绝。直接调用 delegate 也会重查依赖和 Runtime 对象归属，不能靠绕开 Scheduler 提前执行。Scope 的实现是字符串精确相等。",
+    "source": "runtime/supervisor.py:delegate,_check_security,_task_error；runtime/policy.py；runtime/scope.py；runtime/finding_rules.py"
+  },
+  {
+    "title": "人工审批",
+    "notes": "建议 50 秒。重点用一个例子：批准前把 target 或 arguments 改掉，会导致快照不匹配而拒绝。审批还绑定创建它的 State 对象，不能把 action_id 拿到另一个 State 使用。arguments 序列化为 JSON 字符串，读取时返回新字典，dependencies 保存为 tuple。批准只解除 CONFIRM，不绕过 Policy DENY 等其他条件。当前没有用户身份认证、持久化审批或交互式 CLI 审批界面。",
+    "source": "models/approval.py:ApprovalSnapshot；runtime/approval.py；runtime/supervisor.py:approve,_matches_snapshot；tests/test_security_regressions.py"
+  },
+  {
+    "title": "证据与结论",
+    "notes": "建议 45 秒。源码出现 execute( 只是字面命中，不证明用户输入可控。HTTP 500 也不自动等于漏洞。EvidenceExtractor 只处理关联 Finding 的 verify_sqli / verify_ssrf 成功观察。FindingEvaluator 当前规则为存在 STRONG 则 CONFIRMED，否则 UNCONFIRMED，是教学规则，不是通用漏洞判定器。v0.7 真实搜索和 HTTP baseline 都不自动生成 Finding 或 Evidence。",
+    "source": "models/observation.py；models/evidence.py；models/finding.py；runtime/evidence.py；runtime/evaluator.py"
+  },
+  {
+    "title": "调度与阶段",
+    "notes": "建议 40 秒。refresh 会反复扫描 PENDING 任务直到没有新变化，使失败沿多级依赖传播。执行目前是串行 for 循环，READY 不代表并行。PhaseManager 允许当前阶段所有任务处于终态后推进，终态包括失败，所以 COMPLETED 仅表示工作流结束，还必须看 failed_task_ids。空计划可以推进，WAITING_CONFIRMATION 不能推进。",
+    "source": "runtime/scheduler.py；runtime/phase_manager.py；runtime/orchestrator.py"
+  },
+  {
+    "title": "LLM 规划",
+    "notes": "建议 50 秒。LLMPlanner 使用结构化 PlanProposal，模型名由调用者指定。PlanValidator 检查 Agent、capability、目标、Finding 和依赖关系，PlanCompiler 把局部 key 映射为 T1 等 Runtime ID。PlanningContextBuilder 只取白名单布尔信号及受限字段，不把源码、原始响应或任意嵌套对象传入 Planner。这降低不可信内容暴露，但不能宣称彻底解决提示注入。本次验收未调用真实模型 API。",
+    "source": "planner/llm_planner.py；runtime/plan_validator.py；runtime/plan_compiler.py；runtime/planning_context.py；runtime/orchestrator.py"
+  },
+  {
+    "title": "工具权限",
+    "notes": "建议 45 秒。第一层由 Supervisor 判断任务是否可执行，第二层由 ToolExecutor 判断这个 Agent 的这个 action 是否能用指定工具。ToolContext 是冻结模型，包含 task_id、agent、action、authorized_root、authorized_origin，由 Supervisor 在检查后创建。Agent 调用工具时只能提交业务参数。这个边界面向受控代码和不可信规划输入，并不是任意恶意 Python 插件的进程沙箱。",
+    "source": "main.py:build_tool_executor；models/tool.py；runtime/supervisor.py:_build_tool_context；runtime/tool_executor.py:execute"
+  },
+  {
+    "title": "真实工具",
+    "notes": "建议 50 秒。读取使用 resolve(strict=True) 和 relative_to(root) 检查真实路径，同时做有界二进制读取。搜索按 casefold 做字面匹配，没有用户正则。HTTP 只接收 Origin 相对路径，拒绝协议切换、双斜杠和编码后的路径穿越。GET 实际读取上限为 64 KiB 加 1 字节用于判断截断，返回计数字段最多 64 KiB。请求超时不应描述成整个任务绝对耗时上限。目录可被其他进程并发修改的竞态与 DNS 重绑定尚未提供系统级防护。",
+    "source": "tools/file_policy.py；tools/search_code.py；tools/read_source.py；tools/controlled_http.py"
+  },
+  {
+    "title": "离线演示",
+    "notes": "建议 40 秒。命令和数字来自 2026-11-05 对当前 tools 目录的实测，不是性能基准。可先展示搜索返回的路径、行号和片段，再解释为什么没有漏洞结论。DemoPlanner 未发现 Finding 时 VERIFY 为空计划，随后进入 REPORT。即使添加 --origin，也不会让 DemoPlanner 自动创建 HTTP 任务。HTTP 的真实请求演示使用回环集成测试。",
+    "source": "main.py；planner/demo_planner.py；本次离线命令输出；tests/test_http_loopback_integration.py"
+  },
+  {
+    "title": "验证结果",
+    "notes": "建议 45 秒。测试命令为 .venv/Scripts/python.exe -m unittest discover -s tests -q。本次 181 项通过，其中包含临时目录真实文件读写、SDK 离线 transport 和本地回环 HTTP。最值得展示的断言是非法路径后服务器收到的请求列表不变，以及 302 后没有请求 Location 的路径，它们验证拒绝动作没有产生网络副作用。没有声称覆盖率百分比，也没有公网扫描或真实模型调用。",
+    "source": "tests/；tests/test_security_regressions.py；tests/test_http_loopback_integration.py；本次测试输出"
+  },
+  {
+    "title": "设计取舍",
+    "notes": "建议 40 秒。不要把未实现的特性包装成已完成。当前优先建立可以测试的控制边界。未来如果增加并发，需要处理共享状态和审批一致性；如果持久化，需要持久审批身份、幂等键及恢复协议；如果引入不可信插件，需要进程隔离和操作系统层资源限制。个人贡献应根据自己实际编写、调试和理解的部分回答，本材料不虚构团队分工。",
+    "source": "runtime/orchestrator.py；models/approval.py；runtime/approval.py；README.md"
+  },
+  {
+    "title": "边界与后续",
+    "notes": "建议 30 秒。明确当前价值在执行安全框架和可回归验证的控制逻辑。真实工具已经接入，但报告与漏洞验证仍然是教学实现。下一步可以先补充有来源标记的证据和真实验证插件，再考虑持久化与并发。这样的顺序有利于保持安全边界清晰。",
+    "source": "README.md；agents/verification.py；agents/report.py；runtime/evaluator.py"
+  },
+  {
+    "title": "面试讨论",
+    "notes": "建议 15 秒收束。可以选择审批快照、依赖失败传播或真实 HTTP 的拒绝路径测试进行源码展开。若被问是否独立完成，应如实说明自己的设计、实现、测试与 AI 辅助范围，重点解释能够复现的关键行为。",
+    "source": "runtime/supervisor.py；tests/test_security_regressions.py；tests/test_http_loopback_integration.py"
+  }
+]

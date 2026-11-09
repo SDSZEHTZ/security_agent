@@ -1,3 +1,12 @@
+## v0.7 integration hardening (unreleased; do not tag until acceptance)
+
+- Built-in SQLi/SSRF teaching fixtures are marked `DEMO_FIXTURE`; evidence extraction ignores them.
+- Planner context retains the fixture marker while dropping all fabricated signals.
+- Added regression tests demonstrating that fake responses do not produce evidence or confirm findings.
+- SDK contract tests skip missing `openai` or `httpx`, without hiding broken transitive dependencies.
+- Added a harmless `demo_app` directory for the default CLI source scanning workflow.
+- Did not implement real SQLi/SSRF verification or trust unverified third-party Agent output.
+
 ## v0.7.0 - Runtime Tool Integration
 
 ### Added

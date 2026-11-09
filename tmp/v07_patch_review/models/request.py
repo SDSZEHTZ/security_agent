@@ -1,0 +1,37 @@
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+Action = Literal[
+    "analyze_code",
+    "read_file",
+
+    "check_http_baseline",
+
+    "verify_sqli",
+    "verify_ssrf",
+
+    "execute_command",
+    "generate_report",
+]
+
+
+class TaskRequest(BaseModel):
+
+    model_config = ConfigDict(
+        from_attributes=True
+    )
+
+    id: str = Field(min_length=1)
+
+    agent: str = Field(min_length=1)
+
+    action: Action
+
+    target: str = Field(min_length=1)
+
+    arguments: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    phase: Literal["ANALYZE", "VERIFY", "REPORT"] = "ANALYZE"

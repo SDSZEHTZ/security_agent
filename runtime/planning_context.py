@@ -39,6 +39,14 @@ class PlanningContextBuilder:
     def _observations(self, state):
         result = []
         for observation in state.observations[-self.MAX_OBSERVATIONS:]:
+            if observation.data.get("verification_mode") == "DEMO_FIXTURE":
+                # Keep the simulation label, but never expose fabricated signals.
+                result.append({
+                    "task_id": observation.task_id,
+                    "execution_status": observation.execution_status,
+                    "data": {"verification_mode": "DEMO_FIXTURE"},
+                })
+                continue
             # Whitelist evidence signals. Raw source, responses, secrets, arbitrary
             # keys and nested objects are never stringified into planner context.
             data = {}

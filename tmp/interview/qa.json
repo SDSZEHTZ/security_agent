@@ -1,0 +1,21 @@
+{
+  "pdf_pages": 34,
+  "pdf_chapters": 32,
+  "pdf_bookmarks": 35,
+  "pdf_links_on_contents": 32,
+  "pdf_geometry_issues": [],
+  "ppt_notes": 16,
+  "candidate_matches_final": true,
+  "files": [
+    {
+      "name": "Security_Agent_面试展示_v0.1-v0.7.pptx",
+      "bytes": 80681,
+      "sha256": "fed03fd1f160edeb5c8115b60df004b0f3494a4597c57ce88d6bb95fdbf512ea"
+    },
+    {
+      "name": "Security_Agent_源码学习讲义_v0.1-v0.7.pdf",
+      "bytes": 230720,
+      "sha256": "c250d70f3944e51c226aff90e2ac78fad06562a3a41bf2fb68782be9118f4efa"
+    }
+  ]
+}

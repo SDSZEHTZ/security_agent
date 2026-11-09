@@ -1,0 +1,63 @@
+v0.7: source tools and HTTP baseline are real; SQLi/SSRF verification and report tasks remain demos.
+
+=== Result ===
+{
+    "status": "COMPLETED",
+    "failed_task_ids": []
+}
+
+=== Tasks ===
+[
+    {
+        "id": "T1",
+        "phase": "ANALYZE",
+        "action": "analyze_code",
+        "status": "COMPLETED",
+        "block_reason": null
+    },
+    {
+        "id": "T2",
+        "phase": "REPORT",
+        "action": "generate_report",
+        "status": "COMPLETED",
+        "block_reason": null
+    }
+]
+
+=== Observations ===
+[
+    {
+        "agent": "CodeAnalysisAgent",
+        "task_id": "T1",
+        "execution_status": "SUCCESS",
+        "data": {
+            "tool_name": "search_code",
+            "query": "execute(",
+            "matches": [
+                {
+                    "path": "app.py",
+                    "line": 6,
+                    "snippet": "    cursor.execute(\"SELECT id, name FROM users WHERE active = ?\", (1,))"
+                }
+            ],
+            "files_scanned": 1,
+            "bytes_scanned": 293,
+            "truncated": false
+        }
+    },
+    {
+        "agent": "ReportAgent",
+        "task_id": "T2",
+        "execution_status": "SUCCESS",
+        "data": {
+            "message": "Mock report task completed. See runtime findings and evidence.",
+            "demo_only": true
+        }
+    }
+]
+
+=== Evidence ===
+[]
+
+=== Findings ===
+[]

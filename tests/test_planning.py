@@ -1,9 +1,10 @@
+import builtins
 import io
 import json
 import unittest
 from contextlib import redirect_stdout
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from pydantic import ValidationError
 
@@ -214,7 +215,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["context"]["findings"][0]["status"], "POTENTIAL")
         self.assertEqual(calls[2].kwargs["context"]["findings"][0]["status"], "UNCONFIRMED")
         self.assertEqual(state.phase, "END")
-        self.assertEqual(len(state.evidence), 1)
+        # Built-in SQLi/SSRF fixtures never become security evidence.
+        self.assertEqual(state.evidence, [])
+        self.assertEqual(state.findings[0].status, "UNCONFIRMED")
         runtime.run_until_blocked("Inspect app", state)
         self.assertEqual(planner.plan_phase.call_count, 3)
 
@@ -299,8 +302,13 @@ class OrchestratorTests(unittest.TestCase):
 
 class LLMPlannerTests(unittest.TestCase):
     def test_real_sdk_parses_structured_response_using_offline_http_transport(self):
-        import httpx
-        from openai import OpenAI
+        try:
+            import httpx
+            from openai import OpenAI
+        except ModuleNotFoundError as exc:
+            if exc.name not in {"httpx", "openai"}:
+                raise
+            self.skipTest(f"{exc.name} not installed; install requirements.txt to run SDK contract test")
 
         expected = proposal([planned()])
         captured = []
@@ -358,6 +366,35 @@ class LLMPlannerTests(unittest.TestCase):
                 with self.assertRaisesRegex(PlannerError, reason) as caught:
                     LLMPlanner("test-model", client).plan_phase("Inspect", "ANALYZE", {})
                 self.assertNotIn("sensitive", str(caught.exception))
+
+
+class SDKDependencyHandlingTests(unittest.TestCase):
+    def test_missing_sdk_or_httpx_skips_contract_test(self):
+        original_import = builtins.__import__
+        for missing in ({"httpx"}, {"openai"}, {"httpx", "openai"}):
+            with self.subTest(missing=missing):
+                def import_without_dependency(name, *args, **kwargs):
+                    if name in missing:
+                        raise ModuleNotFoundError(f"No module named '{name}'", name=name)
+                    # Only dependency availability is relevant to this test.
+                    if name == "httpx":
+                        return SimpleNamespace()
+                    return original_import(name, *args, **kwargs)
+
+                contract = LLMPlannerTests(
+                    "test_real_sdk_parses_structured_response_using_offline_http_transport")
+                with patch("builtins.__import__", side_effect=import_without_dependency):
+                    with self.assertRaisesRegex(unittest.SkipTest, "install requirements.txt"):
+                        contract.test_real_sdk_parses_structured_response_using_offline_http_transport()
+
+    def test_broken_transitive_dependency_is_not_silently_skipped(self):
+        contract = LLMPlannerTests(
+            "test_real_sdk_parses_structured_response_using_offline_http_transport")
+        error = ModuleNotFoundError("No module named 'httpcore'", name="httpcore")
+        with patch("builtins.__import__", side_effect=error):
+            with self.assertRaises(ModuleNotFoundError) as caught:
+                contract.test_real_sdk_parses_structured_response_using_offline_http_transport()
+        self.assertIs(caught.exception, error)
 
 
 if __name__ == "__main__":

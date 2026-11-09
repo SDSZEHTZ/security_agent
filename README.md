@@ -27,7 +27,7 @@ python -m venv .venv
 默认使用离线 DemoPlanner，无需 API Key，不调用模型。
 演示在授权目录搜索 `execute(`，记录真实命中，再执行 Mock 报告任务。
 关键词命中不自动生成 Finding 或 Evidence，因此默认演示不会规划 SQLi/SSRF 验证。
-`--target` 必须指向存在的源码目录；默认值 `./demo_app` 保留，但仓库未附带该目录。
+`--target` 必须指向存在的源码目录；本仓库附带 `./demo_app` 最小无害源码示例，可直接运行默认命令。
 
 授权 HTTP Origin（与源码目录分开）：
 
@@ -55,7 +55,7 @@ $env:OPENAI_API_KEY = "<your-api-key>"
 接口参考：[OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)。
 
 CodeAnalysisAgent 已实际调用 `search_code` / `read_source`，HTTP baseline 也使用真实工具。
-`verify_sqli`、`verify_ssrf` 仍是教学模拟，不代表真实漏洞验证；不执行系统命令。
+`verify_sqli`、`verify_ssrf` 仍是教学模拟，不代表真实漏洞验证；不执行系统命令。内置模拟结果带 `verification_mode=DEMO_FIXTURE`，EvidenceExtractor 明确拒绝从这些结果抽取 Evidence；传给 Planner 的上下文仅保留模拟标记，不包含虚构的响应码或漏洞信号。任务 COMPLETED 不代表漏洞得到确认。旧的单元测试中使用 Mock Observation 测试证据规则，不表示真实工具已经具备相关验证能力。此标记只能防止意外混淆，不能防止不可信 Agent 伪造验证结果；正式真实漏洞验证需要可信工具来源与额外的证据归属校验。
 ReportAgent 是演示任务；控制台展示的 Finding/Evidence 来自 Runtime，并非 LLM 安全结论。
 
 任务参数：`analyze_code` 需要字符串 `query`，可选 `max_matches`（Agent 默认 20）；
